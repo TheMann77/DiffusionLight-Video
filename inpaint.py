@@ -319,7 +319,7 @@ def main():
         if (image_id < args.data_start) or (image_id >= args.data_end):
             continue
         
-        input_image = image_data["image"] 
+        input_image = image_data["image"].convert('RGB')
         image_path = image_data["path"]
         
         for ev, (prompt_embeds, pooled_prompt_embeds) in embedding_dict.items():
