@@ -37,6 +37,13 @@ python exposure2hdr.py --input_dir output/envmap --output_dir output/hdr
 
 ## Installation
 
+To setup on Conda on ssh, run the following commmands in the terminal:
+```shell
+ssh panther
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
+bash miniconda.sh
+```
+
 To setup the Python environment, you need to run the following commands in both Conda and pip:
 
 ```shell
@@ -46,6 +53,8 @@ pip install -r requirements.txt
 ```
 
 Note that Conda is optional. However, if you choose not to use Conda, you must manually install CUDA-toolkit and OpenEXR. Or you can use singularity container definition files `singularity.def` as we provide.
+
+If there's an error installing OpenExr: `Building wheel for OpenEXR (pyproject.toml) did not run successfully.`, see [here](https://github.com/DiffusionLight/DiffusionLight/issues/7)
 
 ## Prediction
 
@@ -61,7 +70,7 @@ First, we predict the chrome ball in different exposure values (EV) using the fo
 python inpaint.py --dataset <input_directory> --output_dir <output_directory>
 ```
 
-This command outputs three subdirectories:  `raw`, and  `square`
+This command outputs two subdirectories:  `raw`, and  `square`
 
 The contents of each directory are:
 
