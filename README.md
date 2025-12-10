@@ -35,6 +35,15 @@ python ball2envmap.py --ball_dir output/square --envmap_dir output/envmap
 python exposure2hdr.py --input_dir output/envmap --output_dir output/hdr
 ```
 
+## Video
+
+```shell
+python video_to_frames.py --video_file videos/example.mov --output_dir videos --framerate_reduction_factor 5
+python inpaint.py --dataset videos/example --output_dir output
+python ball2envmap.py --ball_dir output/square --envmap_dir output/envmap
+python frames_to_video.py --input_dir output --output_dir video_output --fps 5
+```
+
 ## Installation
 
 To setup on Conda on ssh, run the following commmands in the terminal:
@@ -112,3 +121,7 @@ We use same evaluation method as the confernece version of DiffusionLight. Pleas
 
 ## Visit us 🦉
 [![Vision & Learning Laboratory](https://i.imgur.com/hQhkKhG.png)](https://vistec.ist/vision) [![VISTEC - Vidyasirimedhi Institute of Science and Technology](https://i.imgur.com/4wh8HQd.png)](https://vistec.ist/)
+
+
+# Attribution
+Example video from Vecteezy.com
