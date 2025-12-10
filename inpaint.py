@@ -34,9 +34,9 @@ from relighting.argument import (
 
 def create_argparser():    
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, required=True ,help='directory that contain the image') #dataset name or directory 
-    parser.add_argument("--ball_size", type=int, default=256, help="size of the ball in pixel")
-    parser.add_argument("--ball_dilate", type=int, default=20, help="How much pixel to dilate the ball to make a sharper edge")
+    parser.add_argument("--dataset", type=str, required=True ,help='directory that contains the images') #dataset name or directory 
+    parser.add_argument("--ball_size", type=int, default=256, help="size of the ball in pixels")
+    parser.add_argument("--ball_dilate", type=int, default=20, help="how many pixels to dilate the ball to make a sharper edge")
     parser.add_argument("--prompt", type=str, default="a perfect mirrored reflective chrome ball sphere") 
     parser.add_argument("--prompt_dark", type=str, default="a perfect black dark mirrored reflective chrome ball sphere") 
     parser.add_argument("--negative_prompt", type=str, default="matte, diffuse, flat, dull") 
@@ -49,13 +49,13 @@ def create_argparser():
     parser.add_argument("--denoising_step", default=30, type=int, help="number of denoising step of diffusion model")
     parser.add_argument("--control_scale", default=0.5, type=float, help="controlnet conditioning scale")
     
-    parser.add_argument('--no_controlnet', dest='use_controlnet', action='store_false', help='by default we using controlnet, we have option to disable to see the different')
+    parser.add_argument('--no_controlnet', dest='use_controlnet', action='store_false', help='by default we using controlnet, we have the option to disable it to see the difference')
     parser.set_defaults(use_controlnet=True)
     
-    parser.add_argument('--no_force_square', dest='force_square', action='store_false', help='SDXL is trained for square image, we prefered the square input. but you use this option to disable reshape')
+    parser.add_argument('--no_force_square', dest='force_square', action='store_false', help='SDXL is trained for square images, so we prefer square inputs. You may use this option to disable reshaping')
     parser.set_defaults(force_square=True)
     
-    parser.add_argument('--no_random_loader', dest='random_loader', action='store_false', help="by default, we random how dataset load. This make us able to peak into the trend of result without waiting entire dataset. but can disable if prefereed")
+    parser.add_argument('--no_random_loader', dest='random_loader', action='store_false', help="by default, we randomise how the dataset loads. This makes us able to peek into the trend of result without waiting for the entire dataset. Can disable if preferred")
     parser.set_defaults(random_loader=True)
 
     parser.add_argument('--cpu', dest='is_cpu', action='store_true', help="using CPU inference instead of GPU inference")
@@ -64,15 +64,15 @@ def create_argparser():
     parser.add_argument('--offload', dest='offload', action='store_false', help="to enable diffusers cpu offload")
     parser.set_defaults(offload=False)
     
-    parser.add_argument("--limit_input", default=0, type=int, help="limit number of image to process to n image (0 = no limit), useful for run smallset")
+    parser.add_argument("--limit_input", default=0, type=int, help="limit number of images to process to n image (0 = no limit), useful for running smallset")
 
 
     # LoRA stuff
-    parser.add_argument('--no_lora', dest='use_lora', action='store_false', help='by default we using lora, we have option to disable to see the different')
+    parser.add_argument('--no_lora', dest='use_lora', action='store_false', help='by default we use lora, we have the option to disable to see the difference')
     parser.set_defaults(use_lora=True)
 
     # in DiffusionLight-Turbo, lora_path is default to Turbo-lora
-    parser.add_argument("--lora_path", default="", type=str, help="LoRA Checkpoint path, deplicated, please use exposure_lora_path or turbo_lora_path instead")
+    parser.add_argument("--lora_path", default="", type=str, help="LoRA Checkpoint path, deprecated, please use exposure_lora_path or turbo_lora_path instead")
     parser.add_argument("--lora_scale", default=0.75, type=float, help="LoRA scale factor")
 
     # path of Exposure-lora
@@ -85,7 +85,7 @@ def create_argparser():
 
 
     # speed optimization stuff
-    parser.add_argument('--use_torch_compile', dest='use_torch_compile', action='store_true', help='by default we using torch compile for faster processing speed. disable it if your environemnt is lower than pytorch2.0')
+    parser.add_argument('--use_torch_compile', dest='use_torch_compile', action='store_true', help='By default we use torch compile for faster processing speed. Disable it if your environemnt is lower than pytorch2.0')
     parser.set_defaults(use_torch_compile=False)
     
     # algorithm + iterative stuff
@@ -105,7 +105,7 @@ def create_argparser():
     parser.add_argument("--cache_dir", default="./temp_inpaint_iterative", type=str, help="cache directory for iterative inpaint")
     
     # pararelle processing
-    parser.add_argument("--idx", default=0, type=int, help="index of the current process, useful for running on multiple node")
+    parser.add_argument("--idx", default=0, type=int, help="index of the current process, useful for running on multiple nodes")
     parser.add_argument("--total", default=1, type=int, help="total number of process")
 
     # for HDR stuff
