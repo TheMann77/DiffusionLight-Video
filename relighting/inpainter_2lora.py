@@ -677,6 +677,7 @@ class BallInpainter():
                 print("Add new median")
                 self.median[it] = idx_median
             
+            print(image, avg_ball, mask_ball_for_crop)
             avg_image = merge_normal_map(image, avg_ball, mask_ball_for_crop, x, y)
             avg_image = Image.fromarray(avg_image.astype(np.uint8))
             if save_intermediate:

@@ -120,11 +120,11 @@ def fill_depth_circular(depth_image, x, y, r):
     return depth_image
     
 
-def merge_normal_map(normal_map, normal_ball,  mask_ball, x, y):
+def merge_normal_map(normal_map, normal_ball, mask_ball, x, y):
     """
     Merge a ball to normal map using mask
     @params
-        normal_amp (np.array) - normal map of the scene [height, width, 3]
+        normal_map (np.array) - normal map of the scene [height, width, 3]
         normal_ball (np.array) - normal map of the ball [ball_height, ball_width, 3]
         mask_ball (np.array) - mask of the ball [ball_height, ball_width]
         x (int) - x position of the ball (top-left)

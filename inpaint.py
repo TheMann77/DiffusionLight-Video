@@ -12,7 +12,8 @@ from tqdm.auto import tqdm
 import json
 
 
-from relighting.inpainter_2lora import BallInpainter
+from relighting.image_processor import merge_normal_map
+from relighting.inpainter_2lora import BallInpainter, computeMedian
 
 from relighting.mask_utils import MaskGenerator
 from relighting.ball_processor import (
@@ -48,6 +49,7 @@ def create_argparser():
     parser.add_argument("--seed", default="auto", type=str, help="Seed: right now we use single seed instead to reduce the time, (Auto will use hash file name to generate seed)")
     parser.add_argument("--denoising_step", default=30, type=int, help="number of denoising step of diffusion model")
     parser.add_argument("--control_scale", default=0.5, type=float, help="controlnet conditioning scale")
+    parser.add_argument("--video_type", default="none", choices=["none", "smooth"], type=str, help="algorithm to apply if images are video frames")
     
     parser.add_argument('--no_controlnet', dest='use_controlnet', action='store_false', help='by default we using controlnet, we have the option to disable it to see the difference')
     parser.set_defaults(use_controlnet=True)
@@ -285,7 +287,7 @@ def main():
         resolution=(args.img_width, args.img_height),
         force_square=args.force_square,
         return_dict=True,
-        random_shuffle=args.random_loader,
+        random_shuffle=False if args.video_type != "none" else args.random_loader,
         process_id=args.idx,
         process_total=args.total,
         limit_input=args.limit_input,
@@ -313,6 +315,9 @@ def main():
     # create split seed
     # please DO NOT manual replace this line, use --seed option instead
     seeds = args.seed.split(",")
+
+    if (args.video_type == "smooth"):
+        previous_balls = {}
     
     if args.data_end == -1: args.data_end = len(dataset)
     for image_id, image_data in tqdm(enumerate(dataset), total=len(dataset)):
@@ -327,6 +332,11 @@ def main():
             ev_str = str(ev).replace(".", "") if ev != 0 else "-00"
             outname = os.path.basename(image_path).split(".")[0] + f"_ev{ev_str}"
 
+            # for video smoothing, add previous ball into input image
+            if args.video_type == "smooth" and ev in previous_balls:
+                input_image_array = np.array(input_image)
+                input_image = Image.fromarray(merge_normal_map(input_image_array, previous_balls[ev].astype("uint8"), mask_ball_for_crop, x, y))
+
             # we use top-left corner notation (which is different from aj.aek's center point notation)
             x, y, r = get_ball_location(image_data, args)
             
@@ -340,7 +350,7 @@ def main():
                 
             seeds = tqdm(seeds, desc="seeds") if len(seeds) > 10 else seeds   
                 
-            #replacely create image with differnt seed
+            #replacely create image with different seed
             for seed in seeds:
 
                 start_time = time.time()
@@ -440,9 +450,13 @@ def main():
                     if control_image is not None:
                         control_image.save(os.path.join(control_output_dir, outpng))
                 
-                # save image 
+                # save image
                 output_image.save(os.path.join(raw_output_dir, outpng))
                 square_image.save(os.path.join(square_output_dir, outpng))
+                if args.video_type == "smooth":
+                    ball_image = crop_ball(output_image, mask_ball_for_crop, x, y, r)
+                    ball = computeMedian([ball_image])
+                    previous_balls[ev] = ball
 
                           
 if __name__ == "__main__":
