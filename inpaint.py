@@ -49,7 +49,7 @@ def create_argparser():
     parser.add_argument("--seed", default="auto", type=str, help="Seed: right now we use single seed instead to reduce the time, (Auto will use hash file name to generate seed)")
     parser.add_argument("--denoising_step", default=30, type=int, help="number of denoising step of diffusion model")
     parser.add_argument("--control_scale", default=0.5, type=float, help="controlnet conditioning scale")
-    parser.add_argument("--video_type", default="none", choices=["none", "smooth"], type=str, help="algorithm to apply if images are video frames")
+    parser.add_argument("--video_type", default="none", choices=["none", "smooth", "one-seed"], type=str, help="algorithm to apply if images are video frames")
     
     parser.add_argument('--no_controlnet', dest='use_controlnet', action='store_false', help='by default we using controlnet, we have the option to disable it to see the difference')
     parser.set_defaults(use_controlnet=True)
@@ -356,8 +356,12 @@ def main():
                 start_time = time.time()
                 # set seed, if seed auto we use file name as seed
                 if seed == "auto":
-                    filename = os.path.basename(image_path).split(".")[0]
-                    seed = name2hash(filename) 
+                    if args.video_type == "one-seed":
+                        folder_name = os.path.dirname(os.path.abspath(image_path))
+                        seed = name2hash(folder_name)
+                    else:
+                        filename = os.path.basename(image_path).split(".")[0]
+                        seed = name2hash(filename) 
                     outpng = f"{outname}.png"
                     cache_name = f"{outname}"
                 else:
