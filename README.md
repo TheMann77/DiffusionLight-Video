@@ -39,9 +39,18 @@ python exposure2hdr.py --input_dir output/envmap --output_dir output/hdr
 
 ```shell
 python video_to_frames.py --video_file videos/example.mov --output_dir videos --framerate_reduction_factor 5
+```
+Naive:
+```shell
 python inpaint.py --dataset videos/example --output_dir output
 python ball2envmap.py --ball_dir output/square --envmap_dir output/envmap
 python frames_to_video.py --input_dir output --output_dir video_output --fps 5
+```
+One seed:
+```shell
+python inpaint.py --dataset videos/example --output_dir output_one-seed --video_type one-seed
+python ball2envmap.py --ball_dir output_one-seed/square --envmap_dir output_one-seed/envmap
+python frames_to_video.py --input_dir output_one-seed --output_dir video_output_one-seed --fps 5
 ```
 
 ## Installation
