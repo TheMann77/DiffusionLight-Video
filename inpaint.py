@@ -3,6 +3,7 @@
 
 
 import torch
+torch.cuda.empty_cache()
 import argparse
 import numpy as np
 import torch.distributed as dist
@@ -18,7 +19,6 @@ from relighting.inpainter_2lora import BallInpainter, computeMedian
 from relighting.mask_utils import MaskGenerator
 from relighting.ball_processor import (
     get_ideal_normal_ball,
-    crop_ball
 )
 from relighting.dataset import GeneralLoader
 from relighting.utils import name2hash
@@ -317,7 +317,7 @@ def main():
     seeds = args.seed.split(",")
 
     if (args.video_type == "smooth"):
-        previous_balls = {}
+        previous_images = {}
     
     if args.data_end == -1: args.data_end = len(dataset)
     for image_id, image_data in tqdm(enumerate(dataset), total=len(dataset)):
@@ -331,11 +331,6 @@ def main():
             # create output file name (we always use png to prevent quality loss)
             ev_str = str(ev).replace(".", "") if ev != 0 else "-00"
             outname = os.path.basename(image_path).split(".")[0] + f"_ev{ev_str}"
-
-            # for video smoothing, add previous ball into input image
-            if args.video_type == "smooth" and ev in previous_balls:
-                input_image_array = np.array(input_image)
-                input_image = Image.fromarray(merge_normal_map(input_image_array, previous_balls[ev].astype("uint8"), mask_ball_for_crop, x, y))
 
             # we use top-left corner notation (which is different from aj.aek's center point notation)
             x, y, r = get_ball_location(image_data, args)
@@ -400,7 +395,6 @@ def main():
                     'r': r,
                     'guidance_scale': args.guidance_scale,
                 }
-                
                 if enabled_lora:
                     kwargs["cross_attention_kwargs"] = {"scale": args.lora_scale}                
                 if args.algorithm == "normal":
@@ -442,7 +436,11 @@ def main():
                         "exposure_lora_path": args.exposure_lora_path,
                         "exposure_lora_scale": args.exposure_lora_scale,
                     })
-                    output_image = pipe.inpaint_turbo_swapping(**kwargs).images[0]
+                    if args.video_type == "smooth" and ev in previous_images:
+                        kwargs.update({"strength": args.strength,})
+                        output_image = pipe.inpaint_from_previous_image(previous_image=previous_images[ev], **kwargs).images[0]
+                    else:
+                        output_image = pipe.inpaint_turbo_swapping(**kwargs).images[0]
                 else:
                     raise NotImplementedError(f"Unknown algorithm {args.algorithm}")
                                 
@@ -458,9 +456,7 @@ def main():
                 output_image.save(os.path.join(raw_output_dir, outpng))
                 square_image.save(os.path.join(square_output_dir, outpng))
                 if args.video_type == "smooth":
-                    ball_image = crop_ball(output_image, mask_ball_for_crop, x, y, r)
-                    ball = computeMedian([ball_image])
-                    previous_balls[ev] = ball
+                    previous_images[ev] = output_image
 
                           
 if __name__ == "__main__":

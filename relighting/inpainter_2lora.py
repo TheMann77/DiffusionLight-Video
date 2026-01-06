@@ -589,8 +589,6 @@ class BallInpainter():
             all = np.stack(ball_images, axis=0)
             median = np.median(all, axis=0)
             idx_median = np.argsort(all, axis=0)[all.shape[0]//2]
-            # print(all.shape)
-            # print(idx_median.shape)
             return median, idx_median
 
         def generate_balls(avg_image, current_strength, ball_per_iteration, current_iteration):
@@ -693,6 +691,100 @@ class BallInpainter():
             )
 
         # TODO: add algorithm for select the best ball
+        best_ball = ball_images[0]
+        output_image = merge_normal_map(image, best_ball, mask_ball_for_crop, x, y)
+        return Image.fromarray(output_image.astype(np.uint8))
+    
+    def inpaint_from_previous_image(
+        self,
+        prompt=None,
+        negative_prompt="",
+        num_inference_steps=30,
+        image=None,
+        previous_image=None,
+        mask_image=None,
+        height=None,
+        width=None,
+        controlnet_conditioning_scale=0.5,
+        num_images_per_prompt=1,
+        current_seed=0,
+        cross_attention_kwargs={},
+        strength=0.8,
+        prompt_embeds=None,
+        pooled_prompt_embeds=None,
+        guidance_scale=5.0, # In the paper, we use guidance scale to 5.0 (same as pipeline_xl.py)
+        exposure_lora_path="models/ThisIsTheFinal-lora-hdr-continuous-largeT@900/0_-5/checkpoint-2500",
+        exposure_lora_scale=0.75,
+        switch_lora_timestep=800,
+        **extra_kwargs,
+    ):
+        def generate_ball(avg_image, current_strength):
+            controlnet_kwargs = self.prepare_control_signal(
+                image=avg_image,
+                controlnet_conditioning_scale=controlnet_conditioning_scale,
+                extra_kwargs=extra_kwargs,
+            )
+
+            ball_images = []
+            seed = current_seed
+            new_generator = torch.Generator().manual_seed(seed)
+            output_image = self.pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                num_inference_steps=num_inference_steps,
+                generator=new_generator,
+                image=avg_image,
+                mask_image=mask_image,
+                height=height,
+                width=width,
+                num_images_per_prompt=num_images_per_prompt,
+                strength=current_strength,
+                newx=x,
+                newy=y,
+                newr=r,
+                current_seed=seed,
+                cross_attention_kwargs=cross_attention_kwargs,
+                prompt_embeds=prompt_embeds,
+                pooled_prompt_embeds=pooled_prompt_embeds,
+                guidance_scale=guidance_scale,
+                switch_lora_during_denoise=True,
+                switch_lora_timestep=switch_lora_timestep,
+                switch_lora_path=exposure_lora_path,
+                switch_lora_scale=exposure_lora_scale,
+                **controlnet_kwargs
+            ).images[0]
+
+            self.pipeline.unfuse_lora()
+            self.pipeline.unload_lora_weights()
+            
+            ball_image = crop_ball(output_image, mask_ball_for_crop, x, y, r)
+            ball_images.append(ball_image)
+
+            return ball_images
+
+        height, width = self._default_height_width(height, width)
+
+        x = extra_kwargs["x"]
+        y = extra_kwargs["y"]
+        r = 256  if "r" not in extra_kwargs else extra_kwargs["r"]
+        _, mask_ball_for_crop = get_ideal_normal_ball(size=r)
+        
+        # generate initial average ball
+        avg_image = image
+        avg_ball = crop_ball(previous_image, mask_ball_for_crop, x, y, r)
+
+        # ball refinement loop
+        image = np.array(image)
+        
+        print(image, avg_ball, mask_ball_for_crop)
+        avg_image = merge_normal_map(image, avg_ball, mask_ball_for_crop, x, y)
+        avg_image = Image.fromarray(avg_image.astype(np.uint8))
+        
+        ball_images = generate_ball(
+            avg_image,
+            current_strength=strength,
+        )
+
         best_ball = ball_images[0]
         output_image = merge_normal_map(image, best_ball, mask_ball_for_crop, x, y)
         return Image.fromarray(output_image.astype(np.uint8))

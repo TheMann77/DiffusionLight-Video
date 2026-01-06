@@ -52,6 +52,12 @@ python inpaint.py --dataset videos/example --output_dir output_one-seed --video_
 python ball2envmap.py --ball_dir output_one-seed/square --envmap_dir output_one-seed/envmap
 python frames_to_video.py --input_dir output_one-seed --output_dir video_output_one-seed --fps 5
 ```
+Smooth:
+```shell
+python inpaint.py --dataset videos/example --output_dir output_smooth --video_type smooth
+python ball2envmap.py --ball_dir output_smooth/square --envmap_dir output_smooth/envmap
+python frames_to_video.py --input_dir output_smooth --output_dir video_output_smooth --fps 5
+```
 
 ## Installation
 
