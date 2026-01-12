@@ -49,7 +49,15 @@ def create_argparser():
     parser.add_argument("--seed", default="auto", type=str, help="Seed: right now we use single seed instead to reduce the time, (Auto will use hash file name to generate seed)")
     parser.add_argument("--denoising_step", default=30, type=int, help="number of denoising step of diffusion model")
     parser.add_argument("--control_scale", default=0.5, type=float, help="controlnet conditioning scale")
-    parser.add_argument("--video_type", default="none", choices=["none", "smooth", "one-seed"], type=str, help="algorithm to apply if images are video frames")
+
+    parser.add_argument('--video', dest='is_video', action='store_true', help="are the input images the frames of a video?")
+    parser.set_defaults(is_video=False)
+
+    parser.add_argument('--smooth_frames', dest='smooth_frames', action='store_true', help="for if the images are frames of a video - use the previous frame as initial ball")
+    parser.set_defaults(smooth_frames=False)
+
+    parser.add_argument('--one_seed', dest='one_seed', action='store_true', help="use the same seed for all images")
+    parser.set_defaults(one_seed=False)
     
     parser.add_argument('--no_controlnet', dest='use_controlnet', action='store_false', help='by default we using controlnet, we have the option to disable it to see the difference')
     parser.set_defaults(use_controlnet=True)
@@ -287,7 +295,7 @@ def main():
         resolution=(args.img_width, args.img_height),
         force_square=args.force_square,
         return_dict=True,
-        random_shuffle=False if args.video_type != "none" else args.random_loader,
+        random_shuffle=False if args.is_video else args.random_loader,
         process_id=args.idx,
         process_total=args.total,
         limit_input=args.limit_input,
@@ -316,7 +324,7 @@ def main():
     # please DO NOT manual replace this line, use --seed option instead
     seeds = args.seed.split(",")
 
-    if (args.video_type == "smooth"):
+    if args.smooth_frames:
         previous_images = {}
     
     if args.data_end == -1: args.data_end = len(dataset)
@@ -351,7 +359,7 @@ def main():
                 start_time = time.time()
                 # set seed, if seed auto we use file name as seed
                 if seed == "auto":
-                    if args.video_type == "one-seed":
+                    if args.one_seed:
                         folder_name = os.path.dirname(os.path.abspath(image_path))
                         seed = name2hash(folder_name)
                     else:
@@ -436,9 +444,10 @@ def main():
                         "exposure_lora_path": args.exposure_lora_path,
                         "exposure_lora_scale": args.exposure_lora_scale,
                     })
-                    if args.video_type == "smooth" and ev in previous_images:
+                    if args.smooth_frames and ev in previous_images:
+                        #print(image_id, ev, "smoothed")
                         kwargs.update({"strength": args.strength,})
-                        output_image = pipe.inpaint_from_previous_image(previous_image=previous_images[ev], **kwargs).images[0]
+                        output_image = pipe.inpaint_from_previous_image(previous_image=previous_images[ev], **kwargs)
                     else:
                         output_image = pipe.inpaint_turbo_swapping(**kwargs).images[0]
                 else:
@@ -455,7 +464,7 @@ def main():
                 # save image
                 output_image.save(os.path.join(raw_output_dir, outpng))
                 square_image.save(os.path.join(square_output_dir, outpng))
-                if args.video_type == "smooth":
+                if args.smooth_frames:
                     previous_images[ev] = output_image
 
                           

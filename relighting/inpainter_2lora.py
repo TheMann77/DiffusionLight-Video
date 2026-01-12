@@ -675,7 +675,7 @@ class BallInpainter():
                 print("Add new median")
                 self.median[it] = idx_median
             
-            print(image, avg_ball, mask_ball_for_crop)
+            #print(image, avg_ball, mask_ball_for_crop)
             avg_image = merge_normal_map(image, avg_ball, mask_ball_for_crop, x, y)
             avg_image = Image.fromarray(avg_image.astype(np.uint8))
             if save_intermediate:
@@ -700,6 +700,7 @@ class BallInpainter():
         prompt=None,
         negative_prompt="",
         num_inference_steps=30,
+        generator=None,
         image=None,
         previous_image=None,
         mask_image=None,
@@ -718,49 +719,6 @@ class BallInpainter():
         switch_lora_timestep=800,
         **extra_kwargs,
     ):
-        def generate_ball(avg_image, current_strength):
-            controlnet_kwargs = self.prepare_control_signal(
-                image=avg_image,
-                controlnet_conditioning_scale=controlnet_conditioning_scale,
-                extra_kwargs=extra_kwargs,
-            )
-
-            ball_images = []
-            seed = current_seed
-            new_generator = torch.Generator().manual_seed(seed)
-            output_image = self.pipeline(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                num_inference_steps=num_inference_steps,
-                generator=new_generator,
-                image=avg_image,
-                mask_image=mask_image,
-                height=height,
-                width=width,
-                num_images_per_prompt=num_images_per_prompt,
-                strength=current_strength,
-                newx=x,
-                newy=y,
-                newr=r,
-                current_seed=seed,
-                cross_attention_kwargs=cross_attention_kwargs,
-                prompt_embeds=prompt_embeds,
-                pooled_prompt_embeds=pooled_prompt_embeds,
-                guidance_scale=guidance_scale,
-                switch_lora_during_denoise=True,
-                switch_lora_timestep=switch_lora_timestep,
-                switch_lora_path=exposure_lora_path,
-                switch_lora_scale=exposure_lora_scale,
-                **controlnet_kwargs
-            ).images[0]
-
-            self.pipeline.unfuse_lora()
-            self.pipeline.unload_lora_weights()
-            
-            ball_image = crop_ball(output_image, mask_ball_for_crop, x, y, r)
-            ball_images.append(ball_image)
-
-            return ball_images
 
         height, width = self._default_height_width(height, width)
 
@@ -776,14 +734,52 @@ class BallInpainter():
         # ball refinement loop
         image = np.array(image)
         
-        print(image, avg_ball, mask_ball_for_crop)
+        #print(image, avg_ball, mask_ball_for_crop)
         avg_image = merge_normal_map(image, avg_ball, mask_ball_for_crop, x, y)
         avg_image = Image.fromarray(avg_image.astype(np.uint8))
         
-        ball_images = generate_ball(
-            avg_image,
-            current_strength=strength,
+        # generate ball
+        controlnet_kwargs = self.prepare_control_signal(
+            image=avg_image,
+            controlnet_conditioning_scale=controlnet_conditioning_scale,
+            extra_kwargs=extra_kwargs,
         )
+
+        ball_images = []
+        seed = current_seed
+        if generator is None:
+            generator = torch.Generator().manual_seed(seed)
+        output_image = self.pipeline(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            num_inference_steps=num_inference_steps,
+            generator=generator,
+            image=avg_image,
+            mask_image=mask_image,
+            height=height,
+            width=width,
+            num_images_per_prompt=num_images_per_prompt,
+            strength=strength,
+            newx=x,
+            newy=y,
+            newr=r,
+            current_seed=seed,
+            cross_attention_kwargs=cross_attention_kwargs,
+            prompt_embeds=prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            guidance_scale=guidance_scale,
+            switch_lora_during_denoise=True,
+            switch_lora_timestep=switch_lora_timestep,
+            switch_lora_path=exposure_lora_path,
+            switch_lora_scale=exposure_lora_scale,
+            **controlnet_kwargs
+        ).images[0]
+
+        self.pipeline.unfuse_lora()
+        self.pipeline.unload_lora_weights()
+        
+        ball_image = crop_ball(output_image, mask_ball_for_crop, x, y, r)
+        ball_images.append(ball_image)
 
         best_ball = ball_images[0]
         output_image = merge_normal_map(image, best_ball, mask_ball_for_crop, x, y)

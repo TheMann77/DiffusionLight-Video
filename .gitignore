@@ -1,7 +1,3 @@
 *.pyc
 output/
 video_output/
-output_one-seed/
-video_output_one-seed/
-output_smooth/
-video_output_smooth/
