@@ -52,18 +52,29 @@ python inpaint.py --dataset videos/example --output_dir output/one-seed --video 
 python ball2envmap.py --ball_dir output/one-seed/square --envmap_dir output/one-seed/envmap
 python frames_to_video.py --input_dir output/one-seed --output_dir video_output/one-seed --fps 5
 ```
+One seed with custom seeds:
+```shell
+python inpaint.py --dataset videos/example --output_dir output/one-seed --video --seed "0,37,71"
+python ball2envmap.py --ball_dir output/one-seed/square --envmap_dir output/one-seed/envmap
+python frames_to_video.py --input_dir output/one-seed --output_dir video_output/one-seed --fps 5 --seed "0,37,71"
+```
 Smooth:
 ```shell
 python inpaint.py --dataset videos/example --output_dir output/smooth --video --smooth_frames
 python ball2envmap.py --ball_dir output/smooth/square --envmap_dir output/smooth/envmap
 python frames_to_video.py --input_dir output/smooth --output_dir video_output/smooth --fps 5
 ```
-
 Smooth one seed:
 ```shell
 python inpaint.py --dataset videos/example --output_dir output/smooth_one_seed --video --one_seed --smooth_frames
 python ball2envmap.py --ball_dir output/smooth_one_seed/square --envmap_dir output/smooth_one_seed/envmap
 python frames_to_video.py --input_dir output/smooth_one_seed --output_dir video_output/smooth_one_seed --fps 5
+```
+Smooth one seed with custom seeds:
+```shell
+python inpaint.py --dataset videos/example --output_dir output/smooth_one_seed --video --seed "0,37,71" --smooth_frames
+python ball2envmap.py --ball_dir output/smooth_one_seed/square --envmap_dir output/smooth_one_seed/envmap
+python frames_to_video.py --input_dir output/smooth_one_seed --output_dir video_output/smooth_one_seed --fps 5 --seed "0,37,71"
 ```
 
 ## Installation

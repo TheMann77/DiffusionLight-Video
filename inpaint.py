@@ -444,10 +444,10 @@ def main():
                         "exposure_lora_path": args.exposure_lora_path,
                         "exposure_lora_scale": args.exposure_lora_scale,
                     })
-                    if args.smooth_frames and ev in previous_images:
+                    if args.smooth_frames and ev in previous_images and seed in previous_images[ev]:
                         #print(image_id, ev, "smoothed")
                         kwargs.update({"strength": args.strength,})
-                        output_image = pipe.inpaint_from_previous_image(previous_image=previous_images[ev], **kwargs)
+                        output_image = pipe.inpaint_from_previous_image(previous_image=previous_images[ev][seed], **kwargs)
                     else:
                         output_image = pipe.inpaint_turbo_swapping(**kwargs).images[0]
                 else:
@@ -465,7 +465,9 @@ def main():
                 output_image.save(os.path.join(raw_output_dir, outpng))
                 square_image.save(os.path.join(square_output_dir, outpng))
                 if args.smooth_frames:
-                    previous_images[ev] = output_image
+                    if ev not in previous_images:
+                        previous_images[ev] = {}
+                    previous_images[ev][seed] = output_image
 
                           
 if __name__ == "__main__":
