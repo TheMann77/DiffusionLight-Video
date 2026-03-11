@@ -1,3 +1,6 @@
 *.pyc
+input/
+!input/example/
+!input/example.mov
+intermediate/
 output/
-video_output/
