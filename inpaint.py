@@ -4,6 +4,7 @@
 
 import torch
 torch.cuda.empty_cache()
+import gc
 import argparse
 import numpy as np
 import torch.distributed as dist
@@ -71,7 +72,7 @@ def create_argparser():
     parser.add_argument('--cpu', dest='is_cpu', action='store_true', help="using CPU inference instead of GPU inference")
     parser.set_defaults(is_cpu=False)
 
-    parser.add_argument('--offload', dest='offload', action='store_false', help="to enable diffusers cpu offload")
+    parser.add_argument('--offload', dest='offload', action='store_true', help="to enable diffusers cpu offload")
     parser.set_defaults(offload=False)
     
     parser.add_argument("--limit_input", default=0, type=int, help="limit number of images to process to n image (0 = no limit), useful for running smallset")
@@ -404,54 +405,56 @@ def main():
                     'guidance_scale': args.guidance_scale,
                 }
                 if enabled_lora:
-                    kwargs["cross_attention_kwargs"] = {"scale": args.lora_scale}                
-                if args.algorithm == "normal":
-                    # run single inpainting of DiffusionLight
-                    output_image = pipe.inpaint(**kwargs).images[0]
-                elif args.algorithm == "iterative":
-                    # This is still buggy
-                    print("using inpainting iterative, this is going to take a while...")
-                    kwargs.update({
-                        "strength": args.strength,
-                        "num_iteration": args.num_iteration,
-                        "ball_per_iteration": args.ball_per_iteration,
-                        "agg_mode": args.agg_mode,
-                        "save_intermediate": args.save_intermediate,
-                        "cache_dir": os.path.join(args.cache_dir, cache_name),
-                    })
-                    output_image = pipe.inpaint_iterative(**kwargs)
-                elif args.algorithm in ["turbo_sdedit", "turbo_pred"]:
-                    # Turbo Inpainting 
-                    if args.algorithm == "turbo_pred":
-                        # diffrent between turbo_sdedit and turbo_pred is the enable_acceleration
-                        # which are predict x0 of median ball in one step (Fig 7b)
-                        args.enable_acceleration = True
-                    kwargs.update({
-                        "strength": args.strength,
-                        "num_iteration": args.num_iteration,
-                        "ball_per_iteration": args.ball_per_iteration,
-                        "agg_mode": args.agg_mode,
-                        "save_intermediate": args.save_intermediate,
-                        "cache_dir": os.path.join(args.cache_dir, cache_name),
-                        "enable_acceleration": args.enable_acceleration, 
-                        "exposure_lora_path": args.exposure_lora_path,
-                        "exposure_lora_scale": args.exposure_lora_scale,
-                    })
-                    output_image = pipe.inpaint_turbo_sdedit(**kwargs)
-                elif args.algorithm == "turbo_swapping":
-                    kwargs.update({
-                        "switch_lora_timestep": args.switch_lora_timestep,
-                        "exposure_lora_path": args.exposure_lora_path,
-                        "exposure_lora_scale": args.exposure_lora_scale,
-                    })
-                    if args.smooth_frames and ev in previous_images and seed in previous_images[ev]:
-                        #print(image_id, ev, "smoothed")
-                        kwargs.update({"strength": args.strength,})
-                        output_image = pipe.inpaint_from_previous_image(previous_image=previous_images[ev][seed], **kwargs)
+                    kwargs["cross_attention_kwargs"] = {"scale": args.lora_scale}
+
+                with torch.inference_mode():            
+                    if args.algorithm == "normal":
+                        # run single inpainting of DiffusionLight
+                        output_image = pipe.inpaint(**kwargs).images[0]
+                    elif args.algorithm == "iterative":
+                        # This is still buggy
+                        print("using inpainting iterative, this is going to take a while...")
+                        kwargs.update({
+                            "strength": args.strength,
+                            "num_iteration": args.num_iteration,
+                            "ball_per_iteration": args.ball_per_iteration,
+                            "agg_mode": args.agg_mode,
+                            "save_intermediate": args.save_intermediate,
+                            "cache_dir": os.path.join(args.cache_dir, cache_name),
+                        })
+                        output_image = pipe.inpaint_iterative(**kwargs)
+                    elif args.algorithm in ["turbo_sdedit", "turbo_pred"]:
+                        # Turbo Inpainting 
+                        if args.algorithm == "turbo_pred":
+                            # diffrent between turbo_sdedit and turbo_pred is the enable_acceleration
+                            # which are predict x0 of median ball in one step (Fig 7b)
+                            args.enable_acceleration = True
+                        kwargs.update({
+                            "strength": args.strength,
+                            "num_iteration": args.num_iteration,
+                            "ball_per_iteration": args.ball_per_iteration,
+                            "agg_mode": args.agg_mode,
+                            "save_intermediate": args.save_intermediate,
+                            "cache_dir": os.path.join(args.cache_dir, cache_name),
+                            "enable_acceleration": args.enable_acceleration, 
+                            "exposure_lora_path": args.exposure_lora_path,
+                            "exposure_lora_scale": args.exposure_lora_scale,
+                        })
+                        output_image = pipe.inpaint_turbo_sdedit(**kwargs)
+                    elif args.algorithm == "turbo_swapping":
+                        kwargs.update({
+                            "switch_lora_timestep": args.switch_lora_timestep,
+                            "exposure_lora_path": args.exposure_lora_path,
+                            "exposure_lora_scale": args.exposure_lora_scale,
+                        })
+                        if args.smooth_frames and ev in previous_images and seed in previous_images[ev]:
+                            #print(image_id, ev, "smoothed")
+                            kwargs.update({"strength": args.strength,})
+                            output_image = pipe.inpaint_from_previous_image(previous_image=previous_images[ev][seed], **kwargs)
+                        else:
+                            output_image = pipe.inpaint_turbo_swapping(**kwargs).images[0]
                     else:
-                        output_image = pipe.inpaint_turbo_swapping(**kwargs).images[0]
-                else:
-                    raise NotImplementedError(f"Unknown algorithm {args.algorithm}")
+                        raise NotImplementedError(f"Unknown algorithm {args.algorithm}")
                                 
                 square_image = output_image.crop((x, y, x+r, y+r))
 
@@ -460,6 +463,7 @@ def main():
                     control_image = pipe.get_cache_control_image()
                     if control_image is not None:
                         control_image.save(os.path.join(control_output_dir, outpng))
+                    del control_image
                 
                 # save image
                 output_image.save(os.path.join(raw_output_dir, outpng))
@@ -469,6 +473,15 @@ def main():
                         previous_images[ev] = {}
                     previous_images[ev][seed] = output_image
 
+                del generator, kwargs, square_image, output_image
+                if "result" in locals():
+                    del result
+                gc.collect()
+                torch.cuda.empty_cache()
+            del mask
+        del input_image, image_data
+        gc.collect()
+        torch.cuda.empty_cache()
                           
 if __name__ == "__main__":
     main()
