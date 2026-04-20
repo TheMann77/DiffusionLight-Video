@@ -48,6 +48,8 @@ python frames_to_video.py --input_dir intermediate/ball_frames/naive --output_di
 
 ## Video methods
 
+Make sure the video has no border or padding
+
 ```shell
 python video_to_frames.py --video_file input/example.mov --output_dir input --framerate_reduction_factor 5
 ```
@@ -86,6 +88,11 @@ Smooth one seed with custom seeds:
 python inpaint.py --dataset input/example --output_dir intermediate/ball_frames/smooth_one_seed --video --one_seed --smooth_frames --seed "0,37,71"
 python ball2envmap.py --ball_dir intermediate/ball_frames/smooth_one_seed/square --envmap_dir intermediate/ball_frames/smooth_one_seed/envmap
 python frames_to_video.py --input_dir intermediate/ball_frames/smooth_one_seed --output_dir intermediate/ball_videos/smooth_one_seed --fps 5 --seed "0,37,71"
+```
+
+Convert to HDR:
+```shell
+python exposure2hdr.py --input_dir <output_directory>/envmap --output_dir <output_directory>/hdr
 ```
 
 ## Citation
