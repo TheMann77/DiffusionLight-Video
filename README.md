@@ -95,6 +95,15 @@ Convert to HDR:
 python exposure2hdr.py --input_dir <output_directory>/envmap --output_dir <output_directory>/hdr
 ```
 
+Generate depth-maps for raw frames:
+Run `run_depth_anything.py` with `have_ball=False`
+
+Generate depth-maps for frames with chrome balls:
+Run `run_depth_anything.py` with `have_ball=True`, `ev=25`, `ball_type=naive` for example, or `one-seed`, `smooth`, etc.
+
+Smooth chrome ball depth-maps with geometry:
+Run `depth_anything_modifications.py` with `ev=25`
+
 ## Citation
 
 ```
