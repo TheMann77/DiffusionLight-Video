@@ -18,24 +18,34 @@ wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O mi
 bash miniconda.sh
 ```
 
-To set up the Python environment you need to run the following commands:
+To set up the Python environments you need to run the following commands:
 ```shell
 conda env create -f environments/diffusionlight.yml
-conda create -n depthanything python=3.10
-conda activate depthanything
-cd Depth-Anything-3/External/Depth-Anything-3
-pip install xformers torch\>=2 torchvision
-pip install -e .
-cd ../../../
 conda activate diffusionlight-video
 pip install -r requirements.txt
+conda deactivate
+conda create -n depthanything python=3.10.19
+conda activate depthanything
+cd Depth-Anything-3/External/Depth-Anything-3
+pip install xformers torch==2.10.0 torchvision
+pip install -e .
+cd ../../../
+conda deactivate
+conda create -n videodepthanything python=3.10
+conda activate videodepthanything
+cd Video-Depth-Anything
+pip install -r requirements.txt
+pip uninstall imageio imageio-ffmpeg -y
+pip install "imageio[ffmpeg]"
+bash get_weights.sh
 ```
-Note that there are two Conda envrironments, one for DiffusionLight and one for DepthAnything.
+Note that there are three Conda envrironments, one for DiffusionLight, one for DepthAnything and one for Video DepthAnything.
 Stay in the DiffusionLight environment and run any DepthAnything scripts in the DepthAnything environment using `conda run -n depthanything python script.py`, as is described in this README.
 
 ## Getting started
 
 ```shell
+conda activate diffusionlight-video
 # Convert the video into individual frames:
 python video_to_frames.py --video_file input/example.mov --output_dir input --framerate_reduction_factor 5
 # Inpaint the chrome balls frame-by-frame
