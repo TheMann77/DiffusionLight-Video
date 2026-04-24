@@ -1,4 +1,4 @@
-name: diffusionlight-video
+name: diffusionlight-video2
 channels:
   - conda-forge
   - defaults
@@ -6,3 +6,4 @@ dependencies:
   - python=3.11.6
   - cudatoolkit=11.8
   - openexr==3.2.1 
+  - openexr-python
