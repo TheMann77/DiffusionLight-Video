@@ -1,5 +1,7 @@
 import cv2
-import glob, os, torch
+import glob, os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import torch
 torch.cuda.empty_cache()
 from depth_anything_3.api import DepthAnything3
 from natsort import natsorted
@@ -31,7 +33,7 @@ def unpad(img_files, original_frame, padded=True):
 
 have_ball = False
 
-ev = 25
+ev = "25"
 ball_type = "naive"
 if have_ball:
    frames_path = f"intermediate/ball_frames/{ball_type}/raw"
@@ -50,11 +52,13 @@ model.eval()
 file_filter = f"*_ev-{ev}.png" if have_ball else "*.png"
 images = unpad(natsorted(glob.glob(os.path.join(frames_path, file_filter))), original_path, False)
 
-batch_size = 1
+batch_size = 32 # Need even batch_size
+stride = batch_size // 2
 
 all_depth = []
 all_extrinsics = []
 all_intrinsics = []
+all_conf = []
 
 save_pngs = True
 
@@ -65,25 +69,41 @@ if save_pngs:
 os.makedirs(f"intermediate/depth/{output_name}", exist_ok=True)
 
 for i in range(0, len(images), batch_size):
+    print(f"{torch.cuda.memory_allocated()/1e9:.2f} GB")
     batch = images[i:i+batch_size]
     with torch.inference_mode():
         pred = model.inference(batch, process_res=1024)
+    
+    depths = pred.depth.copy()
+    confs = pred.conf.copy()
+    all_extrinsics.append(pred.extrinsics.copy())
+    all_intrinsics.append(pred.intrinsics.copy()) 
 
     # DepthAnything resizes images, so put them back:
     resized_depths = []
     for i in range(len(batch)):
-        depth = pred.depth[i]
+        depth = depths[i]
         depth_resized = cv2.resize(
             depth,
             (image_width, image_height),
             interpolation=cv2.INTER_LINEAR
         )
         resized_depths.append(depth_resized)
-    pred.depth = np.stack(resized_depths, axis=0)
+    depths = np.stack(resized_depths, axis=0)
 
-    all_depth.append(pred.depth.copy())
-    all_extrinsics.append(pred.extrinsics.copy())
-    all_intrinsics.append(pred.intrinsics.copy())
+    resized_confs = []
+    for i in range(len(batch)):
+        conf = confs[i]
+        conf_resized = cv2.resize(
+            conf,
+            (image_width, image_height),
+            interpolation=cv2.INTER_LINEAR
+        )
+        resized_confs.append(conf_resized)
+    confs = np.stack(resized_confs, axis=0)
+
+    all_depth.append(depths)
+    all_conf.append(confs)
 
     del pred
     torch.cuda.empty_cache()
@@ -91,6 +111,7 @@ for i in range(0, len(images), batch_size):
 depth = np.concatenate(all_depth, axis=0)
 extrinsics = np.concatenate(all_extrinsics, axis=0)
 intrinsics = np.concatenate(all_intrinsics, axis=0)
+conf = np.concatenate(all_conf, axis=0)
 
 if save_pngs:
     for i in range(depth.shape[0]):
@@ -105,3 +126,4 @@ if save_pngs:
 np.save(f"intermediate/depth/{output_name}/depth{ev_suffix}.npy", depth)
 np.save(f"intermediate/depth/{output_name}/extrinsics{ev_suffix}.npy", extrinsics)
 np.save(f"intermediate/depth/{output_name}/intrinsics{ev_suffix}.npy", intrinsics)
+np.save(f"intermediate/depth/{output_name}/conf{ev_suffix}.npy", conf)
