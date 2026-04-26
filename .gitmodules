@@ -4,3 +4,6 @@
 [submodule "Video-Depth-Anything"]
 	path = Video-Depth-Anything
 	url = https://github.com/DepthAnything/Video-Depth-Anything.git
+[submodule "vggt"]
+	path = vggt
+	url = git@github.com:facebookresearch/vggt.git

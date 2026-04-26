@@ -24,6 +24,13 @@ conda env create -f environments/diffusionlight.yml
 conda activate diffusionlight-video
 pip install -r requirements.txt
 conda deactivate
+conda create -n vggt python=3.10
+conda activate vggt
+cd vggt
+pip install -r requirements.txt .
+pip install natsort
+cd ../
+conda deactivate
 conda create -n depthanything python=3.10.19
 conda activate depthanything
 cd Depth-Anything-3/External/Depth-Anything-3

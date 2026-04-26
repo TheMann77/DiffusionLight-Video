@@ -31,87 +31,222 @@ def unpad(img_files, original_frame, padded=True):
         new_imgs.append(new_img)
     return new_imgs
 
-have_ball = False
+def resize_frames(frames, width, height):
+    resized_frames = []
+    for i in range(len(frames)):
+        frame = frames[i]
+        frame_resized = cv2.resize(
+            frame,
+            (width, height),
+            interpolation=cv2.INTER_LINEAR
+        )
+        resized_frames.append(frame_resized)
+    frames = np.stack(resized_frames, axis=0)
 
-ev = "25"
-ball_type = "naive"
-if have_ball:
-   frames_path = f"intermediate/ball_frames/{ball_type}/raw"
-   output_name = ball_type
-   ev_suffix = f"_ev-{ev}"
-else:
-    frames_path = "input/example"
-    output_name = "raw"
-    ev_suffix = ""
+def make_sliding_windows(num_frames, window_size, stride):
+    starts = list(range(0, max(num_frames - window_size + 1, 1), stride))
+    last_start = max(0, num_frames - window_size)
+    if starts[-1] != last_start:
+        starts.append(last_start)
 
-original_path = "input/example/example0.png"
-device = torch.device("cuda")
-model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE")
-model = model.to(device=device)
-model.eval()
-file_filter = f"*_ev-{ev}.png" if have_ball else "*.png"
-images = unpad(natsorted(glob.glob(os.path.join(frames_path, file_filter))), original_path, False)
+    return [(start, min(start + window_size, num_frames)) for start in starts]
 
-batch_size = 32 # Need even batch_size
+def to_homogeneous(T):
+    # Convert N x 3 x 4 (or N x 4 x 4) to homogeneous N x 4 x 4
+    T = np.asarray(T)
+    if T.shape[-2:] == (4, 4):
+        return T.copy()
+
+    if T.shape[-2:] != (3, 4):
+        raise ValueError(f"Expected (N,3,4) or (N,4,4), got {T.shape}")
+
+    out = np.zeros(T.shape[:-2] + (4, 4), dtype=T.dtype)
+    out[..., :3, :4] = T
+    out[..., 3, 3] = 1.0
+    return out
+
+
+def from_homogeneous(T):
+    return T[..., :3, :4]
+
+def align_windows_to_global(results, num_frames, use_scale_alignment=True):
+    """
+    Align DA3 per-window extrinsics into one global coordinate system.
+
+    Assumes DA3 extrinsics are camera-to-world:
+        X_world = R @ X_cam + t
+
+    Returns:
+        depths_global:      (N, H, W)
+        intrinsics_global:  (N, 3, 3)
+        extrinsics_global:  (N, 3, 4)
+        conf_global:        (N, H, W)
+    """
+
+    global_T_by_frame = {}
+    global_depth_by_frame = {}
+    global_K_by_frame = {}
+    global_conf_by_frame = {}
+
+    for window_idx, r in enumerate(results):
+        start = r["start"]
+        end = r["end"]
+
+        depth_local = r["depth"]
+        K_local = r["intrinsics"]
+        T_local = to_homogeneous(r["extrinsics"])
+        conf_local = r["conf"]
+
+        frame_ids = list(range(start, end))
+
+        # First window defines global coordinate system
+        if window_idx == 0:
+            scale = 1.0
+            T_global = T_local.copy()
+
+        else:
+            # Find frames shared with already-aligned previous windows
+            overlap_frames = [
+                f for f in frame_ids
+                if f in global_T_by_frame
+            ]
+
+            if len(overlap_frames) == 0:
+                raise ValueError(
+                    f"Window {window_idx} has no overlap with global trajectory. "
+                    "Use smaller stride or larger window size."
+                )
+
+            # Use middle overlap frame as anchor
+            anchor_frame = overlap_frames[len(overlap_frames) // 2]
+            anchor_local_idx = anchor_frame - start
+
+            T_anchor_global = global_T_by_frame[anchor_frame]
+            T_anchor_local = T_local[anchor_local_idx]
+
+            Rg = T_anchor_global[:3, :3]
+            tg = T_anchor_global[:3, 3]
+
+            Rl = T_anchor_local[:3, :3]
+            tl = T_anchor_local[:3, 3]
+
+            # Rotation that maps this window's local world axes into global axes
+            R_align = Rg @ Rl.T
+
+            # Optional scale alignment using camera centers in overlapping frames
+            if use_scale_alignment and len(overlap_frames) >= 2:
+                local_centers = []
+                global_centers = []
+
+                for f in overlap_frames:
+                    li = f - start
+                    local_centers.append(T_local[li, :3, 3])
+                    global_centers.append(global_T_by_frame[f][:3, 3])
+
+                local_centers = np.asarray(local_centers)
+                global_centers = np.asarray(global_centers)
+
+                d_local = np.linalg.norm(np.diff(local_centers, axis=0), axis=1)
+                d_global = np.linalg.norm(np.diff(global_centers, axis=0), axis=1)
+
+                valid = d_local > 1e-8
+
+                if np.any(valid):
+                    scale = np.median(d_global[valid] / d_local[valid])
+                else:
+                    scale = 1.0
+            else:
+                scale = 1.0
+
+            # Translation that maps the anchor camera center into the global one
+            t_align = tg - scale * (R_align @ tl)
+
+            # Apply alignment to all poses in this window
+            T_global = np.zeros_like(T_local)
+            T_global[:, 3, 3] = 1.0
+
+            T_global[:, :3, :3] = R_align[None, :, :] @ T_local[:, :3, :3]
+
+            T_global[:, :3, 3] = (
+                scale * (R_align @ T_local[:, :3, 3].T).T
+                + t_align[None, :]
+            )
+
+        # If scale alignment was used, depth must be scaled too.
+        # Otherwise camera translations and depths live in different scales.
+        depth_global = depth_local * scale
+
+        # Store only first occurrence of each frame to avoid duplicates.
+        for f in frame_ids:
+            local_idx = f - start
+
+            if f not in global_T_by_frame:
+                global_T_by_frame[f] = T_global[local_idx]
+                global_depth_by_frame[f] = depth_global[local_idx]
+                global_K_by_frame[f] = K_local[local_idx]
+                global_conf_by_frame[f] = conf_local[local_idx]
+
+    # Stack in original frame order
+    depths_global = np.stack([global_depth_by_frame[i] for i in range(num_frames)])
+    intrinsics_global = np.stack([global_K_by_frame[i] for i in range(num_frames)])
+    extrinsics_global = np.stack([from_homogeneous(global_T_by_frame[i]) for i in range(num_frames)])
+    conf_global = np.stack([global_conf_by_frame[i] for i in range(num_frames)])
+
+    return depths_global, intrinsics_global, extrinsics_global, conf_global
+
+batch_size = 32
 stride = batch_size // 2
-
-all_depth = []
-all_extrinsics = []
-all_intrinsics = []
-all_conf = []
-
 save_pngs = True
 
-image_height, image_width, _ = images[0].shape
+frames_path = "input/example"
+output_name = "raw"
+original_path = "input/example/example0.png"
 
+file_filter = "*.png"
+images = unpad(natsorted(glob.glob(os.path.join(frames_path, file_filter))), original_path, False)
+num_images, (image_height, image_width, _) = len(images), images[0].shape
 if save_pngs:
     os.makedirs(f"intermediate/depth_frames/{output_name}/raw", exist_ok=True)
 os.makedirs(f"intermediate/depth/{output_name}", exist_ok=True)
 
-for i in range(0, len(images), batch_size):
-    print(f"{torch.cuda.memory_allocated()/1e9:.2f} GB")
-    batch = images[i:i+batch_size]
+results = []
+
+device = torch.device("cuda")
+model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE")
+model = model.to(device=device)
+model.eval()
+
+for start, end in make_sliding_windows(num_images, window_size=batch_size, stride=stride):
+    batch = images[start:end]
+
     with torch.inference_mode():
         pred = model.inference(batch, process_res=1024)
     
     depths = pred.depth.copy()
     confs = pred.conf.copy()
-    all_extrinsics.append(pred.extrinsics.copy())
-    all_intrinsics.append(pred.intrinsics.copy()) 
 
-    # DepthAnything resizes images, so put them back:
-    resized_depths = []
-    for i in range(len(batch)):
-        depth = depths[i]
-        depth_resized = cv2.resize(
-            depth,
-            (image_width, image_height),
-            interpolation=cv2.INTER_LINEAR
-        )
-        resized_depths.append(depth_resized)
-    depths = np.stack(resized_depths, axis=0)
+    resize_frames(depths, image_width, image_height)
+    resize_frames(confs, image_width, image_height)
 
-    resized_confs = []
-    for i in range(len(batch)):
-        conf = confs[i]
-        conf_resized = cv2.resize(
-            conf,
-            (image_width, image_height),
-            interpolation=cv2.INTER_LINEAR
-        )
-        resized_confs.append(conf_resized)
-    confs = np.stack(resized_confs, axis=0)
-
-    all_depth.append(depths)
-    all_conf.append(confs)
+    results.append({
+        "start": start,
+        "end": end,
+        "depth": depths,
+        "intrinsics": np.asarray(pred.intrinsics),
+        "extrinsics": np.asarray(pred.extrinsics),
+        "conf": confs,
+    })
 
     del pred
     torch.cuda.empty_cache()
 
-depth = np.concatenate(all_depth, axis=0)
-extrinsics = np.concatenate(all_extrinsics, axis=0)
-intrinsics = np.concatenate(all_intrinsics, axis=0)
-conf = np.concatenate(all_conf, axis=0)
+depth, intrinsics, extrinsics, conf = (
+    align_windows_to_global(
+        results,
+        num_frames=num_images,
+        use_scale_alignment=True,
+    )
+)
 
 if save_pngs:
     for i in range(depth.shape[0]):
@@ -119,11 +254,11 @@ if save_pngs:
         d_norm = (d - depth.min()) / (depth.max() - depth.min() + 1e-8)
         d_uint8 = (d_norm * 255).astype(np.uint8)
         cv2.imwrite(
-            f"intermediate/depth_frames/{output_name}/raw/depth_{i}{ev_suffix}.png",
+            f"intermediate/depth_frames/{output_name}/raw/depth_{i}.png",
             d_uint8
         )
 
-np.save(f"intermediate/depth/{output_name}/depth{ev_suffix}.npy", depth)
-np.save(f"intermediate/depth/{output_name}/extrinsics{ev_suffix}.npy", extrinsics)
-np.save(f"intermediate/depth/{output_name}/intrinsics{ev_suffix}.npy", intrinsics)
-np.save(f"intermediate/depth/{output_name}/conf{ev_suffix}.npy", conf)
+np.save(f"intermediate/depth/{output_name}/depth.npy", depth)
+np.save(f"intermediate/depth/{output_name}/extrinsics.npy", extrinsics)
+np.save(f"intermediate/depth/{output_name}/intrinsics.npy", intrinsics)
+np.save(f"intermediate/depth/{output_name}/conf.npy", conf)
