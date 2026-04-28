@@ -3,6 +3,7 @@ import open3d as o3d
 
 diffusionlight_img_size = 1024
 diffusionlight_ball_radius = 256 // 2
+voxel_size = 0.002
 
 data = np.load("intermediate/depth_vggt/data.npz")
 
@@ -55,9 +56,10 @@ pcd.points = o3d.utility.Vector3dVector(points_filtered.astype(np.float64))
 pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64))
 
 # Optional cleanup/downsample
-pcd = pcd.voxel_down_sample(voxel_size=0.002)
+pcd = pcd.voxel_down_sample(voxel_size=voxel_size)
 
 o3d.io.write_point_cloud("intermediate/depth_vggt/pointcloud.ply", pcd)
+np.save("intermediate/depth_vggt/voxel_size.npy", np.array(voxel_size))
 
 # Visualise spheres for sanity check:
 """sphere_points = []

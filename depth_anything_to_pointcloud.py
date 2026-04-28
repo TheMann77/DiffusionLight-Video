@@ -62,7 +62,7 @@ pcd.points = o3d.utility.Vector3dVector(pts)
 # pcd.colors = o3d.utility.Vector3dVector(colors)
 
 print("Downsampling")
-pcd = pcd.voxel_down_sample(voxel_size=0.02)
+pcd = pcd.voxel_down_sample(voxel_size=0.05)
 
 print("Removing outliers")
 pcd, _ = pcd.remove_statistical_outlier(

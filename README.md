@@ -62,7 +62,7 @@ python ball2envmap.py --ball_dir intermediate/ball_frames/naive/square --envmap_
 # Reconstruct chrome ball videos for visual analysis
 python frames_to_video.py --input_dir intermediate/ball_frames/naive --output_dir intermediate/ball_videos/naive --fps 6
 # Compose HDR image
-python exposure2hdr.py --input_dir intermediate/ball_frames/naive/envmap --output_dir output/naive/hdr
+python exposure2hdr.py --input_dir intermediate/ball_frames/naive/envmap --output_dir intermediate/ball_frames/naive/hdr
 ```
 
 ## Video methods
