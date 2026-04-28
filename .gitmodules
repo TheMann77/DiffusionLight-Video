@@ -7,3 +7,6 @@
 [submodule "vggt"]
 	path = vggt
 	url = git@github.com:facebookresearch/vggt.git
+[submodule "LEDiff"]
+	path = LEDiff
+	url = https://github.com/TheMann77/LEDiff.git

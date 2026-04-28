@@ -31,23 +31,18 @@ pip install -r requirements.txt .
 pip install natsort
 cd ../
 conda deactivate
-conda create -n depthanything python=3.10.19
-conda activate depthanything
-cd Depth-Anything-3/External/Depth-Anything-3
-pip install xformers torch==2.10.0 torchvision
+conda create -n lediff python=3.10
+conda activate lediff
+cd LEDiff
 pip install -e .
+cd examples/text_to_image
+pip install -r requirements.txt
+pip install -r requirements_flax.txt
 cd ../../../
 conda deactivate
-conda create -n videodepthanything python=3.10
-conda activate videodepthanything
-cd Video-Depth-Anything
-pip install -r requirements.txt
-pip uninstall imageio imageio-ffmpeg -y
-pip install "imageio[ffmpeg]"
-bash get_weights.sh
 ```
-Note that there are three Conda envrironments, one for DiffusionLight, one for DepthAnything and one for Video DepthAnything.
-Stay in the DiffusionLight environment and run any DepthAnything scripts in the DepthAnything environment using `conda run -n depthanything python script.py`, as is described in this README.
+Then download the Highlight Hallucination Model model from [here](https://github.com/Hans1984/LEDiff/tree/main/examples/text_to_image) and unzip to `LEDiff`.
+Note that there are three Conda envrironments, one for DiffusionLight, one for VGGT and one for LEDiff.
 
 ## Getting started
 
@@ -114,6 +109,15 @@ Convert to HDR:
 python exposure2hdr.py --input_dir <output_directory>/envmap --output_dir <output_directory>/hdr
 ```
 
+### LEDiff
+```shell
+python LEDiff/examples/text_to_image/test_hdr_itm.py \
+  --model_path LEDiff/model_highlight/ \
+  --image_folder input/example/ \
+  --output_hdr_path intermediate/LEDiff/ \
+  --seed 42
+```
+
 ### DepthAnything3
 Using the depthanything conda environment:
 
@@ -142,20 +146,6 @@ Generate depthmaps, pointcloud and lightcloud:
 Run `run_vggt.py`
 Run `vggt_to_pointcloud.py`
 Run `generate_lightcloud.py` with `ball_type="naive"`, or `"smooth"`, `"one-seed"`
-
-## Citation
-
-```
-@inproceedings{Chinchuthakun2025DiffusionLightTurbo,
-  author = {Chinchuthakun, Worameth and Phongthawee, Pakkapon and Raj, Amit and Jampani, Varun and Khungurn, Pramook and Suwajanakorn, Supasorn},
-  title = {DiffusionLight-Turbo: Accelerated Light Probes for Free via Single-Pass Chrome Ball Inpainting},
-  booktitle = {ArXiv},
-  year = {2025},
-}
-```
-
-## Visit us 🦉
-[![Vision & Learning Laboratory](https://i.imgur.com/hQhkKhG.png)](https://vistec.ist/vision) [![VISTEC - Vidyasirimedhi Institute of Science and Technology](https://i.imgur.com/4wh8HQd.png)](https://vistec.ist/)
 
 
 # Attribution
