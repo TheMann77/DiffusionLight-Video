@@ -3,7 +3,8 @@ import open3d as o3d
 
 diffusionlight_img_size = 1024
 diffusionlight_ball_radius = 256 // 2
-voxel_size = 0.002
+voxel_size = 0.005
+print("Voxel size:", voxel_size)
 
 data = np.load("intermediate/depth_vggt/data.npz")
 
@@ -17,7 +18,7 @@ imgs = data["images"]
 threshold = np.quantile(conf, 0.1)
 mask = conf > threshold
 points_filtered = points[mask]
-print(points_filtered.shape)
+print("Total points:", points_filtered.shape[0])
 
 # Calculate ball centres in world coordinates:
 N, image_height, image_width, _ = imgs.shape
@@ -55,11 +56,11 @@ pcd = o3d.geometry.PointCloud()
 pcd.points = o3d.utility.Vector3dVector(points_filtered.astype(np.float64))
 pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64))
 
-# Optional cleanup/downsample
 pcd = pcd.voxel_down_sample(voxel_size=voxel_size)
 
 o3d.io.write_point_cloud("intermediate/depth_vggt/pointcloud.ply", pcd)
 np.save("intermediate/depth_vggt/voxel_size.npy", np.array(voxel_size))
+print("Downsampled points:", len(pcd.points))
 
 # Visualise spheres for sanity check:
 """sphere_points = []

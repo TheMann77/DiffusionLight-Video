@@ -137,6 +137,12 @@ conda activate diffusionlight-video
 python video_to_frames.py --video_file intermediate/depth_video/raw/example_vis.mp4 --output_dir intermediate/depth_video/raw --output_filename depth --framerate_reduction_factor 5
 ```
 
+### VGGT
+Generate depthmaps, pointcloud and lightcloud:
+Run `run_vggt.py`
+Run `vggt_to_pointcloud.py`
+Run `generate_lightcloud.py` with `ball_type="naive"`, or `"smooth"`, `"one-seed"`
+
 ## Citation
 
 ```

@@ -1,11 +1,13 @@
 import open3d as o3d
 import numpy as np
 from natsort import natsorted
-import glob, os
+import glob, os, torch
 import OpenEXR
 import Imath
 from tqdm import tqdm
 import open3d as o3d
+
+ball_type = "naive"
 
 def load_exr(path):
     exr = OpenEXR.InputFile(path)
@@ -23,6 +25,24 @@ def load_exr(path):
 
     img = np.stack([r, g, b], axis=-1)
     return img
+
+def build_voxel_lookup(pointcloud, grid_min, voxel_size, grid_shape):
+    voxel_indices = np.floor((pointcloud - grid_min[None, :]) / voxel_size).astype(np.int64)
+    valid = np.all((voxel_indices >= 0) & (voxel_indices < grid_shape[None, :]), axis=1)
+    voxel_indices = voxel_indices[valid]
+    valid_point_indices = np.flatnonzero(valid)
+    flat_ids = np.ravel_multi_index(
+            voxel_indices.T,
+            dims=tuple(grid_shape),
+    )
+    order = np.argsort(flat_ids)
+    point_indices_sorted = valid_point_indices[order]
+    return {
+        "flat_sorted" : flat_ids[order],
+        "voxel_indices_sorted" : voxel_indices[order],
+        "point_indices_sorted" : point_indices_sorted,
+        "voxel_centres_sorted" : pointcloud[point_indices_sorted]
+    }
 
 def ray_pointcloud_intersection_batch(
     P_batch,
@@ -399,9 +419,156 @@ def ray_pointcloud_intersection_batch(
         "point_index": hit_point_index,
     }
 
+def build_gpu_grid(pointcloud, grid_min, voxel_size, grid_shape, device="cuda"):
+    pointcloud = torch.tensor(pointcloud, device=device, dtype=torch.float32)
+    grid_min = torch.tensor(grid_min, device=device, dtype=torch.float32)
+
+    voxel_indices = torch.floor((pointcloud - grid_min) / voxel_size).long()
+
+    valid = ((voxel_indices >= 0) & (voxel_indices < torch.tensor(grid_shape, device=device))).all(dim=1)
+
+    voxel_indices = voxel_indices[valid]
+    point_indices = torch.nonzero(valid).squeeze(1)
+
+    # Flatten voxel indices
+    flat = voxel_indices[:, 0] * (grid_shape[1] * grid_shape[2]) \
+         + voxel_indices[:, 1] * grid_shape[2] \
+         + voxel_indices[:, 2]
+
+    # Build hash table
+    max_flat = grid_shape[0] * grid_shape[1] * grid_shape[2]
+
+    # Sparse: use dict-like structure via two tensors
+    flat_sorted, order = torch.sort(flat)
+    point_sorted = point_indices[order]
+    voxel_sorted = voxel_indices[order]
+
+    return {
+        "flat": flat_sorted,
+        "point_idx": point_sorted,
+        "voxel_idx": voxel_sorted,
+        "grid_min": grid_min,
+        "grid_shape": torch.tensor(grid_shape, device=device),
+        "voxel_size": voxel_size,
+    }
+
+def ray_pointcloud_intersection_batch_torch(
+    P, D, grid, max_steps=None, eps=1e-6
+):
+    device = P.device
+
+    grid_min = grid["grid_min"]
+    grid_shape = grid["grid_shape"]
+    voxel_size = grid["voxel_size"]
+
+    flat_occ = grid["flat"]
+    point_idx_occ = grid["point_idx"]
+
+    n = P.shape[0]
+
+    # Normalize directions
+    D = D / (torch.norm(D, dim=1, keepdim=True) + eps)
+
+    # AABB entry
+    grid_max = grid_min + voxel_size * grid_shape
+
+    invD = 1.0 / torch.clamp(D, min=eps, max=None)
+
+    t1 = (grid_min - P) * invD
+    t2 = (grid_max - P) * invD
+
+    tmin = torch.minimum(t1, t2)
+    tmax = torch.maximum(t1, t2)
+
+    mu_enter = torch.max(tmin, dim=1).values
+    mu_exit = torch.min(tmax, dim=1).values
+
+    active = (mu_enter <= mu_exit) & (mu_exit >= 0)
+
+    mu = torch.clamp(mu_enter, min=0.0)
+
+    # Start point
+    X = P + (mu.unsqueeze(1) + eps) * D
+
+    idx = torch.floor((X - grid_min) / voxel_size).long()
+    idx = torch.maximum(idx, torch.zeros_like(idx))
+    idx = torch.minimum(idx, grid_shape - 1)
+
+    # DDA setup
+    step = torch.sign(D).long()
+
+    next_boundary = grid_min + (idx + (step > 0).long()) * voxel_size
+
+    mu_next = (next_boundary - P) / D
+    mu_delta = voxel_size / torch.abs(D)
+
+    hit_mask = torch.zeros(n, dtype=torch.bool, device=device)
+    hit_mu = torch.full((n,), float("inf"), device=device)
+    hit_point_idx = torch.full((n,), -1, dtype=torch.long, device=device)
+
+    still = active.clone()
+
+    if max_steps == None:
+        max_steps = max_steps = int(grid_shape.sum() + 3)
+
+    for _ in range(max_steps):
+        if not still.any():
+            break
+
+        idx_active = idx[still]
+
+        flat = idx_active[:, 0] * (grid_shape[1] * grid_shape[2]) \
+             + idx_active[:, 1] * grid_shape[2] \
+             + idx_active[:, 2]
+
+        # searchsorted (GPU)
+        pos = torch.searchsorted(flat_occ, flat)
+
+        valid = pos < flat_occ.shape[0]
+        match = torch.zeros_like(valid)
+
+        match[valid] = flat_occ[pos[valid]] == flat[valid]
+
+        # hits
+        hit_ids = torch.where(still)[0][match]
+
+        if len(hit_ids) > 0:
+            hit_mask[hit_ids] = True
+            hit_mu[hit_ids] = mu[hit_ids]
+            hit_point_idx[hit_ids] = point_idx_occ[pos[match]]
+
+            still[hit_ids] = False
+
+        # advance
+        remain = torch.where(still)[0]
+
+        if len(remain) == 0:
+            break
+
+        axes = torch.argmin(mu_next[remain], dim=1)
+
+        mu_new = mu_next[remain, axes]
+
+        done = mu_new > mu_exit[remain]
+        still[remain[done]] = False
+
+        adv = remain[~done]
+        ax = axes[~done]
+
+        mu[adv] = mu_next[adv, ax]
+
+        idx[adv, ax] += step[adv, ax]
+        mu_next[adv, ax] += mu_delta[adv, ax]
+
+    return {
+        "hit_mask": hit_mask,
+        "mu": hit_mu,
+        "point_index": hit_point_idx,
+    }
+
 print("Loading files")
 pcd = o3d.io.read_point_cloud("intermediate/depth_vggt/pointcloud.ply")
-envmap_files = natsorted(glob.glob(os.path.join("intermediate/ball_frames/naive/hdr", "*.exr")))
+envmap_files = natsorted(glob.glob(os.path.join(f"intermediate/ball_frames/{ball_type}/hdr", "*.exr")))
 balls = np.load("intermediate/depth_vggt/balls.npz")
 data = np.load("intermediate/depth_vggt/data.npz")
 voxel_size = np.load("intermediate/depth_vggt/voxel_size.npy").item()
@@ -430,25 +597,24 @@ print("Setting up voxel grid")
 # Build a voxel grid around pointcloud, assuming each point is centre of a voxel
 grid_min = pointcloud.min(axis=0) - 0.5 * voxel_size
 grid_max = pointcloud.max(axis=0) + 0.5 * voxel_size
-
-voxel_indices = np.floor((pointcloud - grid_min[None, :]) / voxel_size).astype(np.int64)
 grid_shape = np.ceil((grid_max - grid_min) / voxel_size).astype(np.int64)
-valid = np.all((voxel_indices >= 0) & (voxel_indices < grid_shape[None, :]), axis=1)
-voxel_indices = voxel_indices[valid]
-valid_point_indices = np.flatnonzero(valid)
-flat_ids = np.ravel_multi_index(
-    voxel_indices.T,
-    dims=tuple(grid_shape),
-)
-order = np.argsort(flat_ids)
-occupied_flat_sorted = flat_ids[order]
-occupied_voxel_indices_sorted = voxel_indices[order]
-occupied_point_indices_sorted = valid_point_indices[order]
-occupied_voxel_centres_sorted = pointcloud[occupied_point_indices_sorted]
 
-
-pointcloud_sum_intensities = np.zeros((p, 3)) # Array of total R, G, B intensity values for each pointcloud point
-pointcloud_num_hits = np.zeros((p)) # Array of number of hits for each pointcloud point
+alg_type = "torch" # numpy or torch
+if alg_type == "numpy":
+    voxel_lookup = build_voxel_lookup(pointcloud, grid_min, voxel_size, grid_shape)
+    occupied_flat_sorted=voxel_lookup["flat_sorted"]
+    occupied_point_indices_sorted=voxel_lookup["point_indices_sorted"]
+    occupied_voxel_indices_sorted=voxel_lookup["voxel_indices_sorted"]
+    occupied_voxel_centres_sorted=voxel_lookup["voxel_centres_sorted"]
+    pointcloud_sum_intensities = np.zeros((p, 3)) # Array of total R, G, B intensity values for each pointcloud point
+    pointcloud_num_hits = np.zeros((p)) # Array of number of hits for each pointcloud point
+elif alg_type == "torch":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device == "cpu":
+        print("CUDA not available, running on CPU")
+    grid = build_gpu_grid(pointcloud, grid_min, voxel_size, grid_shape)
+    pointcloud_sum_intensities_torch = torch.zeros((p, 3), device=device)
+    pointcloud_num_hits_torch = torch.zeros(p, device=device)
 
 # (x, y) are coordinates in the envmap
 # N is the surface normal of P
@@ -456,7 +622,6 @@ pointcloud_num_hits = np.zeros((p)) # Array of number of hits for each pointclou
 # O is the camera position
 # X_in(lambda) = O + lambda * D_in; is the ray from the camera to P
 # X_out(mu) = P + mu * D_out; is the reflected ray from P
-
 
 xs = np.arange(w)
 ys = np.arange(h)
@@ -486,7 +651,6 @@ N_cam_flat = N_cam.reshape(-1, 3)
 valid_env_flat = valid_env.reshape(-1)
 valid_indices = np.flatnonzero(valid_env_flat)
 
-print("Setup complete")
 print("Iterating frames:")
 for frame in tqdm(range(F)):
     R = extrinsics[frame][:, :3]
@@ -511,35 +675,68 @@ for frame in tqdm(range(F)):
 
     env_flat = envmaps[frame].reshape(-1, envmaps.shape[-1])
 
-    intersection_result = ray_pointcloud_intersection_batch(
-        P_batch=P_world_flat[valid_indices],
-        D_batch=D_out_flat[valid_indices],
-        grid_min=grid_min,
-        grid_max=grid_max,
-        grid_shape=grid_shape,
-        voxel_size=voxel_size,
-        occupied_flat_sorted=occupied_flat_sorted,
-        occupied_point_indices_sorted=occupied_point_indices_sorted,
-        occupied_voxel_indices_sorted=occupied_voxel_indices_sorted,
-        occupied_voxel_centres_sorted=occupied_voxel_centres_sorted,
-    )
-    hit_mask = intersection_result["hit_mask"]
-    hit_point_indices = intersection_result["point_index"][hit_mask]
-    hit_intensities = env_flat[valid_indices][hit_mask]
-    # Weight the lighting intensities by the square of how far away that point is
-    # So the result is the intensity at 1 unit distance from that point
-    dist2 = intersection_result["mu"][hit_mask] ** 2
-    weighted_intensities = hit_intensities * dist2[:, None]
-    np.add.at(
-        pointcloud_sum_intensities,
-        hit_point_indices,
-        weighted_intensities,
-    )
-    np.add.at(
-        pointcloud_num_hits,
-        hit_point_indices,
-        1,
-    )
+    if alg_type == "numpy":
+        intersection_result = ray_pointcloud_intersection_batch(
+            P_batch=P_world_flat[valid_indices],
+            D_batch=D_out_flat[valid_indices],
+            grid_min=grid_min,
+            grid_max=grid_max,
+            grid_shape=grid_shape,
+            voxel_size=voxel_size,
+            occupied_flat_sorted=occupied_flat_sorted,
+            occupied_point_indices_sorted=occupied_point_indices_sorted,
+            occupied_voxel_indices_sorted=occupied_voxel_indices_sorted,
+            occupied_voxel_centres_sorted=occupied_voxel_centres_sorted,
+        )
+        hit_mask = intersection_result["hit_mask"]
+        hit_point_indices = intersection_result["point_index"][hit_mask]
+        hit_intensities = env_flat[valid_indices][hit_mask]
+        # Weight the lighting intensities by the square of how far away that point is
+        # So the result is the intensity at 1 unit distance from that point
+        dist2 = intersection_result["mu"][hit_mask] ** 2
+        weighted_intensities = hit_intensities * dist2[:, None]
+        np.add.at(
+            pointcloud_sum_intensities,
+            hit_point_indices,
+            weighted_intensities,
+        )
+        np.add.at(
+            pointcloud_num_hits,
+            hit_point_indices,
+            1,
+        )
+    if alg_type == "torch":
+        P_batch = torch.from_numpy(P_world_flat[valid_indices]).float().cuda()
+        D_batch = torch.from_numpy(D_out_flat[valid_indices]).float().cuda()
+        intersection_result = ray_pointcloud_intersection_batch_torch(
+            P=P_batch,
+            D=D_batch,
+            grid=grid,
+        )
+        hit_mask = intersection_result["hit_mask"]
+        hit_point_indices = intersection_result["point_index"][hit_mask]
+        env_flat_torch = torch.from_numpy(env_flat).float().to(device)
+        valid_indices_torch = torch.from_numpy(valid_indices).long().to(device)
+        hit_intensities = env_flat_torch[valid_indices_torch][hit_mask]
+        dist2 = intersection_result["mu"][hit_mask] ** 2
+
+        weighted_intensities = hit_intensities * dist2.unsqueeze(1)
+        pointcloud_sum_intensities_torch.index_add_(
+            0,
+            hit_point_indices,
+            weighted_intensities
+        )
+
+        pointcloud_num_hits_torch.index_add_(
+            0,
+            hit_point_indices,
+            torch.ones_like(hit_point_indices, dtype=torch.float32)
+        )
+
+if alg_type == "torch":
+    pointcloud_sum_intensities = pointcloud_sum_intensities_torch.cpu().numpy()
+    pointcloud_num_hits = pointcloud_num_hits_torch.cpu().numpy()
+    
 
 average_rgb = np.zeros((p, 3), dtype=float)
 
@@ -554,8 +751,8 @@ lightcloud = np.concatenate(
     axis=1
 )
 
-os.makedirs("output/naive", exist_ok=True)
-np.save("output/naive/lightcloud.npy", lightcloud)
+os.makedirs(f"output/{ball_type}", exist_ok=True)
+np.save(f"output/{ball_type}/lightcloud.npy", lightcloud)
 
 # Output for testing:
 points = lightcloud[:, :3]   # (p, 3)
@@ -567,4 +764,9 @@ pcd = o3d.geometry.PointCloud()
 pcd.points = o3d.utility.Vector3dVector(points)
 pcd.colors = o3d.utility.Vector3dVector(rgb_ldr)
 
-o3d.io.write_point_cloud("lightcloud.ply", pcd)
+o3d.io.write_point_cloud(f"output/{ball_type}/lightcloud.ply", pcd)
+
+print("Total points:", p)
+mask = np.any(lightcloud[:, 3:] != 0, axis=1)
+coloured_lightcloud = lightcloud[mask]
+print("Coloured points:", coloured_lightcloud.shape[0])
