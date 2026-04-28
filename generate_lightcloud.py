@@ -4,6 +4,8 @@ from natsort import natsorted
 import glob, os
 import OpenEXR
 import Imath
+from tqdm import tqdm
+import open3d as o3d
 
 def load_exr(path):
     exr = OpenEXR.InputFile(path)
@@ -22,111 +24,380 @@ def load_exr(path):
     img = np.stack([r, g, b], axis=-1)
     return img
 
-def ray_pointcloud_intersection(P, D, max_mu: float | None = None, eps: float = 1e-9):
-    # Assume a ray X_out(mu) = P + mu * D, and find first intersection with pointcloud
-    # If hit, returns {
-    #   "mu" - the mu value of the first intersection with a voxel
-    #   "hit_point" - the coordinates of the first intersection with a voxel               
-    #   "voxel_index" - integer grid coordinate of the intersected voxel
-    #   "voxel_centre" - the pointcloud point of first intersection
-    #   "point_index" - the index of that point in the pointcloud array
-    # }
-    # Otherwise returns None
-    mu_enter = -np.inf
-    mu_exit = np.inf
-    for axis in range(3):
-        if abs(D[axis]) < eps:
-            # Ray is parallel to this pair of box planes.
-            if P[axis] < grid_min[axis] or P[axis] > grid_max[axis]:
-                return None
-        else:
-            mu1 = (grid_min[axis] - P[axis]) / D[axis]
-            mu2 = (grid_max[axis] - P[axis]) / D[axis]
+def ray_pointcloud_intersection_batch(
+    P_batch,
+    D_batch,
+    grid_min,
+    grid_max,
+    grid_shape,
+    voxel_size,
+    occupied_flat_sorted,
+    occupied_point_indices_sorted,
+    occupied_voxel_indices_sorted,
+    occupied_voxel_centres_sorted,
+    max_mu=None,
+    eps=1e-9,
+    max_steps=None,
+    normalize_directions=True,
+):
+    """
+    Batched ray / voxelized point-cloud intersection.
 
-            axis_enter = min(mu1, mu2)
-            axis_exit = max(mu1, mu2)
+    Rays:
+        X_i(mu) = P_batch[i] + mu * D_batch[i]
 
-            mu_enter = max(mu_enter, axis_enter)
-            mu_exit = min(mu_exit, axis_exit)
+    Each occupied voxel corresponds to one point in the original point cloud.
 
-    if mu_enter > mu_exit:
-        return None
+    Parameters
+    ----------
+    P_batch : np.ndarray, shape (n, 3)
+        Ray origins.
 
-    if mu_exit < 0:
-        return None
+    D_batch : np.ndarray, shape (n, 3)
+        Ray directions.
 
-    if max_mu is not None and mu_enter > max_mu:
-        return None
+    grid_min : np.ndarray, shape (3,)
+        Minimum world coordinate of the voxel grid.
 
-    # Start at the first point where the ray enters the point-cloud AABB.
-    mu = max(mu_enter, 0.0)
+    grid_max : np.ndarray, shape (3,)
+        Maximum world coordinate of the voxel grid.
+
+    grid_shape : np.ndarray or tuple, shape (3,)
+        Number of voxels along x, y, z.
+
+    voxel_size : float
+        Side length of each voxel.
+
+    occupied_flat_sorted : np.ndarray, shape (m,)
+        Sorted flattened occupied voxel IDs.
+
+    occupied_point_indices_sorted : np.ndarray, shape (m,)
+        Original pointcloud index for each occupied voxel.
+
+    occupied_voxel_indices_sorted : np.ndarray, shape (m, 3)
+        3D voxel index for each occupied voxel.
+
+    occupied_voxel_centres_sorted : np.ndarray, shape (m, 3)
+        Original pointcloud coordinate for each occupied voxel.
+
+    max_mu : float or None
+        Optional maximum ray distance/parameter.
+
+    eps : float
+        Small numerical tolerance.
+
+    max_steps : int or None
+        Maximum number of DDA steps. If None, a conservative default is used.
+
+    normalize_directions : bool
+        If True, D_batch is normalized internally, so returned mu is a world-space distance.
+
+    Returns
+    -------
+    result : dict
+        {
+            "hit_mask": shape (n,), bool
+            "mu": shape (n,), float - the mu value of the first intersection with a voxel
+            "hit_point": shape (n, 3), float - the coordinates of the first intersection with a voxel
+            "voxel_index": shape (n, 3), int - integer grid coordinate of the intersected voxel
+            "voxel_centre": shape (n, 3), float - the pointcloud point of first intersection
+            "point_index": shape (n,), int - the index of that point in the pointcloud array
+        }
+
+        For rays with no hit:
+            hit_mask[i] == False
+            mu[i] == np.inf
+            point_index[i] == -1
+    """
+
+    P_batch = np.asarray(P_batch, dtype=float)
+    D_batch = np.asarray(D_batch, dtype=float)
+
+    grid_min = np.asarray(grid_min, dtype=float)
+    grid_max = np.asarray(grid_max, dtype=float)
+    grid_shape = np.asarray(grid_shape, dtype=np.int64)
+
+    if P_batch.ndim != 2 or P_batch.shape[1] != 3:
+        raise ValueError("P_batch must have shape (n, 3)")
+
+    if D_batch.shape != P_batch.shape:
+        raise ValueError("D_batch must have the same shape as P_batch")
+
+    n = P_batch.shape[0]
+
+    if normalize_directions:
+        D_norm = np.linalg.norm(D_batch, axis=1, keepdims=True)
+        valid_dir = D_norm[:, 0] > eps
+
+        D = np.divide(
+            D_batch,
+            D_norm,
+            out=np.zeros_like(D_batch),
+            where=D_norm > eps,
+        )
+    else:
+        D = D_batch.copy()
+        valid_dir = np.linalg.norm(D, axis=1) > eps
+
+    # ------------------------------------------------------------------
+    # Output arrays
+    # ------------------------------------------------------------------
+    hit_mask = np.zeros(n, dtype=bool)
+    hit_mu = np.full(n, np.inf, dtype=float)
+    hit_point = np.full((n, 3), np.nan, dtype=float)
+    hit_voxel_index = np.full((n, 3), -1, dtype=np.int64)
+    hit_voxel_centre = np.full((n, 3), np.nan, dtype=float)
+    hit_point_index = np.full(n, -1, dtype=np.int64)
+
+    # ------------------------------------------------------------------
+    # 1. Batched ray / overall grid AABB intersection
+    # ------------------------------------------------------------------
+    parallel = np.abs(D) < eps
+
+    outside_parallel = parallel & (
+        (P_batch < grid_min[None, :]) |
+        (P_batch > grid_max[None, :])
+    )
+
+    invalid = np.any(outside_parallel, axis=1) | (~valid_dir)
+
+    mu1 = np.full((n, 3), -np.inf, dtype=float)
+    mu2 = np.full((n, 3), np.inf, dtype=float)
+
+    nonparallel = ~parallel
+
+    mu1[nonparallel] = (
+        (grid_min[None, :] - P_batch)[nonparallel]
+        / D[nonparallel]
+    )
+
+    mu2[nonparallel] = (
+        (grid_max[None, :] - P_batch)[nonparallel]
+        / D[nonparallel]
+    )
+
+    axis_enter = np.minimum(mu1, mu2)
+    axis_exit = np.maximum(mu1, mu2)
+
+    mu_enter = np.max(axis_enter, axis=1)
+    mu_exit = np.min(axis_exit, axis=1)
+
+    active = (
+        (~invalid)
+        & (mu_enter <= mu_exit)
+        & (mu_exit >= 0.0)
+    )
 
     if max_mu is not None:
-        mu_exit = min(mu_exit, max_mu)
+        active &= mu_enter <= max_mu
+        mu_exit = np.minimum(mu_exit, max_mu)
 
-    # Small push forward to avoid ambiguity if exactly on a voxel boundary.
-    X_start = P + (mu + eps) * D
+    if not np.any(active):
+        return {
+            "hit_mask": hit_mask,
+            "mu": hit_mu,
+            "hit_point": hit_point,
+            "voxel_index": hit_voxel_index,
+            "voxel_centre": hit_voxel_centre,
+            "point_index": hit_point_index,
+        }
 
-    current_idx = np.floor((X_start - grid_min) / voxel_size).astype(int)
+    # Start at first valid point inside the grid AABB.
+    mu = np.maximum(mu_enter, 0.0)
 
-    # Clamp in case numerical precision puts us just outside.
-    current_idx = np.clip(current_idx, 0, grid_shape - 1)
+    X_start = P_batch + (mu[:, None] + eps) * D
 
-    # Set up DDA traversal:
-    step = np.zeros(3, dtype=int)
-    mu_next = np.empty(3, dtype=float)
-    mu_delta = np.empty(3, dtype=float)
+    current_idx = np.floor(
+        (X_start - grid_min[None, :]) / voxel_size
+    ).astype(np.int64)
+
+    current_idx = np.clip(
+        current_idx,
+        0,
+        grid_shape[None, :] - 1,
+    )
+
+    # ------------------------------------------------------------------
+    # 2. Batched DDA setup
+    # ------------------------------------------------------------------
+    step = np.zeros((n, 3), dtype=np.int64)
+    mu_next = np.full((n, 3), np.inf, dtype=float)
+    mu_delta = np.full((n, 3), np.inf, dtype=float)
+
+    positive = D > eps
+    negative = D < -eps
+
+    step[positive] = 1
+    step[negative] = -1
+
     for axis in range(3):
-        if abs(D[axis]) < eps:
-            step[axis] = 0
-            mu_next[axis] = np.inf
-            mu_delta[axis] = np.inf
-        elif D[axis] > 0:
-            step[axis] = 1
-            next_boundary = grid_min[axis] + (current_idx[axis] + 1) * voxel_size
-            mu_next[axis] = (next_boundary - P[axis]) / D[axis]
-            mu_delta[axis] = voxel_size / abs(D[axis])
-        else:
-            step[axis] = -1
-            next_boundary = grid_min[axis] + current_idx[axis] * voxel_size
-            mu_next[axis] = (next_boundary - P[axis]) / D[axis]
-            mu_delta[axis] = voxel_size / abs(D[axis])
-    
-    # Walk through voxels by increasing mu:
-    while True:
-        # Stop if outside grid.
-        if np.any(current_idx < 0) or np.any(current_idx >= grid_shape):
-            return None
+        pos = positive[:, axis]
+        neg = negative[:, axis]
 
-        idx_tuple = tuple(current_idx)
+        if np.any(pos):
+            next_boundary_pos = (
+                grid_min[axis]
+                + (current_idx[:, axis] + 1) * voxel_size
+            )
 
-        # If this voxel is occupied, this is the first hit.
-        if idx_tuple in occupied:
-            point_index, voxel_centre = occupied[idx_tuple]
+            mu_next[pos, axis] = (
+                next_boundary_pos[pos] - P_batch[pos, axis]
+            ) / D[pos, axis]
 
-            # The actual entry mu is the current mu.
-            # If the ray starts inside this voxel, mu can be 0.
-            mu_hit = max(mu, 0.0)
-            hit_point = P + mu_hit * D
+            mu_delta[pos, axis] = voxel_size / np.abs(D[pos, axis])
 
-            return {
-                "mu": mu_hit,
-                "hit_point": hit_point,
-                "voxel_index": current_idx.copy(),
-                "voxel_centre": voxel_centre,
-                "point_index": point_index,
-            }
+        if np.any(neg):
+            next_boundary_neg = (
+                grid_min[axis]
+                + current_idx[:, axis] * voxel_size
+            )
 
-        # Move to the next voxel boundary.
-        axis = int(np.argmin(mu_next))
+            mu_next[neg, axis] = (
+                next_boundary_neg[neg] - P_batch[neg, axis]
+            ) / D[neg, axis]
 
-        mu = mu_next[axis]
+            mu_delta[neg, axis] = voxel_size / np.abs(D[neg, axis])
 
-        if mu > mu_exit:
-            return None
+    if max_steps is None:
+        # Conservative upper bound for crossing the grid.
+        max_steps = int(np.sum(grid_shape) + 3)
 
-        current_idx[axis] += step[axis]
-        mu_next[axis] += mu_delta[axis]
+    still_running = active.copy()
+
+    num_occupied = len(occupied_flat_sorted)
+
+    # ------------------------------------------------------------------
+    # 3. Batched DDA traversal
+    # ------------------------------------------------------------------
+    for _ in range(max_steps):
+        ray_ids = np.flatnonzero(still_running)
+
+        if len(ray_ids) == 0:
+            break
+
+        idx = current_idx[ray_ids]
+
+        inside = np.all(
+            (idx >= 0) & (idx < grid_shape[None, :]),
+            axis=1,
+        )
+
+        if not np.all(inside):
+            still_running[ray_ids[~inside]] = False
+
+            ray_ids = ray_ids[inside]
+            idx = idx[inside]
+
+            if len(ray_ids) == 0:
+                continue
+
+        # Flatten current voxel indices
+        current_flat = np.ravel_multi_index(
+            idx.T,
+            dims=tuple(grid_shape),
+        )
+
+        # Sparse occupied lookup using sorted flat voxel IDs.
+        search_pos = np.searchsorted(
+            occupied_flat_sorted,
+            current_flat,
+        )
+
+        valid_search_pos = search_pos < num_occupied
+
+        found = np.zeros(len(ray_ids), dtype=bool)
+
+        safe_pos = search_pos[valid_search_pos]
+        found[valid_search_pos] = (
+            occupied_flat_sorted[safe_pos]
+            == current_flat[valid_search_pos]
+        )
+
+        # --------------------------------------------------------------
+        # Record hits
+        # --------------------------------------------------------------
+        if np.any(found):
+            found_ray_ids = ray_ids[found]
+            found_pos = search_pos[found]
+
+            hit_mask[found_ray_ids] = True
+
+            hit_mu[found_ray_ids] = np.maximum(
+                mu[found_ray_ids],
+                0.0,
+            )
+
+            hit_point[found_ray_ids] = (
+                P_batch[found_ray_ids]
+                + hit_mu[found_ray_ids, None] * D[found_ray_ids]
+            )
+
+            hit_voxel_index[found_ray_ids] = (
+                occupied_voxel_indices_sorted[found_pos]
+            )
+
+            hit_voxel_centre[found_ray_ids] = (
+                occupied_voxel_centres_sorted[found_pos]
+            )
+
+            hit_point_index[found_ray_ids] = (
+                occupied_point_indices_sorted[found_pos]
+            )
+
+            still_running[found_ray_ids] = False
+
+        # --------------------------------------------------------------
+        # Advance non-hit rays
+        # --------------------------------------------------------------
+        remaining_ray_ids = ray_ids[~found]
+
+        if len(remaining_ray_ids) == 0:
+            continue
+
+        axes = np.argmin(mu_next[remaining_ray_ids], axis=1)
+
+        new_mu = mu_next[remaining_ray_ids, axes]
+
+        past_exit = new_mu > mu_exit[remaining_ray_ids]
+
+        if np.any(past_exit):
+            still_running[remaining_ray_ids[past_exit]] = False
+
+        advance_ray_ids = remaining_ray_ids[~past_exit]
+        advance_axes = axes[~past_exit]
+
+        if len(advance_ray_ids) == 0:
+            continue
+
+        mu[advance_ray_ids] = mu_next[
+            advance_ray_ids,
+            advance_axes,
+        ]
+
+        current_idx[
+            advance_ray_ids,
+            advance_axes,
+        ] += step[
+            advance_ray_ids,
+            advance_axes,
+        ]
+
+        mu_next[
+            advance_ray_ids,
+            advance_axes,
+        ] += mu_delta[
+            advance_ray_ids,
+            advance_axes,
+        ]
+
+    return {
+        "hit_mask": hit_mask,
+        "mu": hit_mu,
+        "hit_point": hit_point,
+        "voxel_index": hit_voxel_index,
+        "voxel_centre": hit_voxel_centre,
+        "point_index": hit_point_index,
+    }
 
 print("Loading files")
 pcd = o3d.io.read_point_cloud("intermediate/depth_vggt/pointcloud.ply")
@@ -159,46 +430,141 @@ print("Setting up voxel grid")
 # Build a voxel grid around pointcloud, assuming each point is centre of a voxel
 grid_min = pointcloud.min(axis=0) - 0.5 * voxel_size
 grid_max = pointcloud.max(axis=0) + 0.5 * voxel_size
-# Convert point centres to integer voxel indices
-voxel_indices = np.floor((pointcloud - grid_min) / voxel_size).astype(int)
-grid_shape = voxel_indices.max(axis=0) + 1
 
-occupied = {}
-for i, (idx, center) in enumerate(zip(map(tuple, voxel_indices), pointcloud)):
-    occupied[idx] = (i, center)
+voxel_indices = np.floor((pointcloud - grid_min[None, :]) / voxel_size).astype(np.int64)
+grid_shape = np.ceil((grid_max - grid_min) / voxel_size).astype(np.int64)
+valid = np.all((voxel_indices >= 0) & (voxel_indices < grid_shape[None, :]), axis=1)
+voxel_indices = voxel_indices[valid]
+valid_point_indices = np.flatnonzero(valid)
+flat_ids = np.ravel_multi_index(
+    voxel_indices.T,
+    dims=tuple(grid_shape),
+)
+order = np.argsort(flat_ids)
+occupied_flat_sorted = flat_ids[order]
+occupied_voxel_indices_sorted = voxel_indices[order]
+occupied_point_indices_sorted = valid_point_indices[order]
+occupied_voxel_centres_sorted = pointcloud[occupied_point_indices_sorted]
+
 
 pointcloud_sum_intensities = np.zeros((p, 3)) # Array of total R, G, B intensity values for each pointcloud point
 pointcloud_num_hits = np.zeros((p)) # Array of number of hits for each pointcloud point
 
-for frame in range(F):
-    print("Frame", frame)
-    for x in range(w):
-        print(x)
-        for y in range(h):
-            # (x, y) are coordinates in the envmap
-            # N is the surface normal of P
-            # P is the surface point on the actual ball
-            # O is the camera position
-            # X_in(lambda) = O + lambda * D_in; is the ray from the camera to P
-            # X_out(mu) = P + mu * D_out; is the reflected ray from P
-            theta = 2 * np.pi * x / (w - 1)   # longitude
-            phi = np.pi * y / (h - 1)         # latitude
-            sin_phi, cos_phi, sin_theta, cos_theta = np.sin(phi), np.cos(phi), np.sin(theta), np.cos(theta)
-            D_P = np.array([sin_phi * cos_theta, sin_phi * sin_theta, cos_phi]) # 3D direction from ball centre to P
-            V = np.array([1, 0, 0]) # Unit vector from surface point towards camera. Using DiffusionLight convention.
-            N_cam = (D_P + V) / np.linalg.norm(D_P + V)
-            R = extrinsics[frame][:, :3]
-            t = extrinsics[frame][:, 3]
-            N_world = R.T @ N_cam
-            P_world = ball_centres[frame] + ball_radii[frame] * N_world
-            O_world = -R.T @ t
-            D_in = (P_world - O_world) / np.linalg.norm(P_world - O_world)
-            D_out = D_in - 2 * np.dot(D_in, N_world) * N_world
+# (x, y) are coordinates in the envmap
+# N is the surface normal of P
+# P is the surface point on the actual ball
+# O is the camera position
+# X_in(lambda) = O + lambda * D_in; is the ray from the camera to P
+# X_out(mu) = P + mu * D_out; is the reflected ray from P
 
-            intersection_result = ray_pointcloud_intersection(P_world, D_out)
-            if intersection_result is not None:
-                point_index = intersection_result["point_index"]
-                pointcloud_sum_intensities[point_index] += envmaps[frame, y, x]
-                pointcloud_num_hits[point_index] += 1
-                
-lightcloud = pointcloud_sum_intensities / pointcloud_num_hits[:, None]
+
+xs = np.arange(w)
+ys = np.arange(h)
+theta = 2.0 * np.pi * xs / (w - 1)
+phi = np.pi * ys / (h - 1)
+theta_grid, phi_grid = np.meshgrid(theta, phi, indexing="xy") # (h, w)
+sin_phi, cos_phi, sin_theta, cos_theta = np.sin(phi_grid), np.cos(phi_grid), np.sin(theta_grid), np.cos(theta_grid)
+D_P = np.stack(
+    [
+        sin_phi * cos_theta,
+        sin_phi * sin_theta,
+        cos_phi,
+    ],
+    axis=-1,
+)  # (h, w, 3)
+V = np.array([1.0, 0.0, 0.0])
+N_cam = D_P + V
+N_cam_norm = np.linalg.norm(N_cam, axis=-1, keepdims=True)
+valid_env = N_cam_norm[..., 0] > 1e-12
+N_cam = np.divide(
+    N_cam,
+    N_cam_norm,
+    out=np.zeros_like(N_cam),
+    where=N_cam_norm > 1e-12,
+)
+N_cam_flat = N_cam.reshape(-1, 3)
+valid_env_flat = valid_env.reshape(-1)
+valid_indices = np.flatnonzero(valid_env_flat)
+
+print("Setup complete")
+print("Iterating frames:")
+for frame in tqdm(range(F)):
+    R = extrinsics[frame][:, :3]
+    t = extrinsics[frame][:, 3]
+    C_ball = ball_centres[frame]
+    r_ball = ball_radii[frame]
+    O_world = -R.T @ t
+    N_world_flat = N_cam_flat @ R
+    N_world_flat /= (
+        np.linalg.norm(N_world_flat, axis=1, keepdims=True) + 1e-12
+    )
+    P_world_flat = C_ball[None, :] + r_ball * N_world_flat
+    D_in_flat = P_world_flat - O_world[None, :]
+    D_in_flat /= (
+        np.linalg.norm(D_in_flat, axis=1, keepdims=True) + 1e-12
+    )
+    dots = np.sum(D_in_flat * N_world_flat, axis=1, keepdims=True)
+    D_out_flat = D_in_flat - 2.0 * dots * N_world_flat
+    D_out_flat /= (
+        np.linalg.norm(D_out_flat, axis=1, keepdims=True) + 1e-12
+    )
+
+    env_flat = envmaps[frame].reshape(-1, envmaps.shape[-1])
+
+    intersection_result = ray_pointcloud_intersection_batch(
+        P_batch=P_world_flat[valid_indices],
+        D_batch=D_out_flat[valid_indices],
+        grid_min=grid_min,
+        grid_max=grid_max,
+        grid_shape=grid_shape,
+        voxel_size=voxel_size,
+        occupied_flat_sorted=occupied_flat_sorted,
+        occupied_point_indices_sorted=occupied_point_indices_sorted,
+        occupied_voxel_indices_sorted=occupied_voxel_indices_sorted,
+        occupied_voxel_centres_sorted=occupied_voxel_centres_sorted,
+    )
+    hit_mask = intersection_result["hit_mask"]
+    hit_point_indices = intersection_result["point_index"][hit_mask]
+    hit_intensities = env_flat[valid_indices][hit_mask]
+    # Weight the lighting intensities by the square of how far away that point is
+    # So the result is the intensity at 1 unit distance from that point
+    dist2 = intersection_result["mu"][hit_mask] ** 2
+    weighted_intensities = hit_intensities * dist2[:, None]
+    np.add.at(
+        pointcloud_sum_intensities,
+        hit_point_indices,
+        weighted_intensities,
+    )
+    np.add.at(
+        pointcloud_num_hits,
+        hit_point_indices,
+        1,
+    )
+
+average_rgb = np.zeros((p, 3), dtype=float)
+
+mask = pointcloud_num_hits > 0
+average_rgb[mask] = (
+    pointcloud_sum_intensities[mask]
+    / pointcloud_num_hits[mask, None]
+)
+
+lightcloud = np.concatenate(
+    [pointcloud, average_rgb],
+    axis=1
+)
+
+os.makedirs("output/naive", exist_ok=True)
+np.save("output/naive/lightcloud.npy", lightcloud)
+
+# Output for testing:
+points = lightcloud[:, :3]   # (p, 3)
+rgb_hdr = lightcloud[:, 3:]  # (p, 3)
+rgb_ldr = rgb_hdr / (1.0 + rgb_hdr)
+gamma = 2.2
+rgb_ldr = np.clip(rgb_ldr, 0, 1) ** (1.0 / gamma)
+pcd = o3d.geometry.PointCloud()
+pcd.points = o3d.utility.Vector3dVector(points)
+pcd.colors = o3d.utility.Vector3dVector(rgb_ldr)
+
+o3d.io.write_point_cloud("lightcloud.ply", pcd)
