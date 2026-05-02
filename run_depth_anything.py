@@ -6,6 +6,7 @@ torch.cuda.empty_cache()
 from depth_anything_3.api import DepthAnything3
 from natsort import natsorted
 import numpy as np
+from tqdm import tqdm
 
 def unpad(img_files, original_frame, padded=True):
     #If padded is true, assumes file is 1024x1024
@@ -73,8 +74,8 @@ def align_windows_to_global(results, num_frames, use_scale_alignment=True):
     """
     Align DA3 per-window extrinsics into one global coordinate system.
 
-    Assumes DA3 extrinsics are camera-to-world:
-        X_world = R @ X_cam + t
+    Assumes DA3 extrinsics are world-to-cam:
+        X_cam = R @ X_world + t
 
     Returns:
         depths_global:      (N, H, W)
@@ -94,7 +95,8 @@ def align_windows_to_global(results, num_frames, use_scale_alignment=True):
 
         depth_local = r["depth"]
         K_local = r["intrinsics"]
-        T_local = to_homogeneous(r["extrinsics"])
+        T_local_w2c = to_homogeneous(r["extrinsics"])
+        T_local = invert_extrinsics(T_local_w2c)
         conf_local = r["conf"]
 
         frame_ids = list(range(start, end))
@@ -189,10 +191,33 @@ def align_windows_to_global(results, num_frames, use_scale_alignment=True):
     # Stack in original frame order
     depths_global = np.stack([global_depth_by_frame[i] for i in range(num_frames)])
     intrinsics_global = np.stack([global_K_by_frame[i] for i in range(num_frames)])
-    extrinsics_global = np.stack([from_homogeneous(global_T_by_frame[i]) for i in range(num_frames)])
+    T_global_c2w = np.stack([global_T_by_frame[i] for i in range(num_frames)])
+    T_global_w2c = invert_extrinsics(T_global_c2w)
+    extrinsics_global = from_homogeneous(T_global_w2c)
     conf_global = np.stack([global_conf_by_frame[i] for i in range(num_frames)])
 
     return depths_global, intrinsics_global, extrinsics_global, conf_global
+
+def camera_centers(T):
+    R = T[:, :3, :3]
+    t = T[:, :3, 3]
+    return -np.einsum('nij,nj->ni', R.transpose(0,2,1), t)
+
+def invert_extrinsics(T):
+    """Invert homogeneous transforms (N,4,4)"""
+    R = T[:, :3, :3]
+    t = T[:, :3, 3]
+
+    T_inv = np.zeros_like(T)
+    T_inv[:, 3, 3] = 1.0
+
+    R_inv = np.transpose(R, (0, 2, 1))
+    t_inv = -np.einsum('nij,nj->ni', R_inv, t)
+
+    T_inv[:, :3, :3] = R_inv
+    T_inv[:, :3, 3] = t_inv
+
+    return T_inv
 
 batch_size = 32
 stride = batch_size // 2
@@ -216,7 +241,7 @@ model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE")
 model = model.to(device=device)
 model.eval()
 
-for start, end in make_sliding_windows(num_images, window_size=batch_size, stride=stride):
+for start, end in tqdm(make_sliding_windows(num_images, window_size=batch_size, stride=stride)):
     batch = images[start:end]
 
     with torch.inference_mode():

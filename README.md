@@ -115,7 +115,7 @@ python LEDiff/examples/text_to_image/test_hdr_itm.py \
   --model_path LEDiff/model_highlight/ \
   --image_folder input/example/ \
   --output_hdr_path intermediate/LEDiff/ \
-  --seed 42
+  --keep_size
 ```
 
 ### DepthAnything3

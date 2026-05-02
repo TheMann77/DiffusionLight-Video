@@ -49,7 +49,7 @@ def get_normal_vector(incoming_vector: np.ndarray, reflect_vector: np.ndarray):
     incoming_vector: the vector from the point to the camera
     reflect_vector: the vector from the point to the light source
     """
-    #N = 2(R ⋅ I)R - I
+    #R = 2(N ⋅ I)N - I
     N = (incoming_vector + reflect_vector) / np.linalg.norm(incoming_vector + reflect_vector, axis=-1, keepdims=True)
     return N
 

@@ -23,7 +23,7 @@ image_names = natsorted(glob.glob(os.path.join(frames_path, file_filter)))
 images = load_and_preprocess_images(image_names).to(device)
 
 with torch.no_grad():
-    with torch.cuda.amp.autocast(dtype=dtype):
+    with torch.amp.autocast('cuda', dtype=dtype):
         images = images[None]  # add batch dimension
         aggregated_tokens_list, ps_idx = model.aggregator(images)
                 

@@ -1,5 +1,7 @@
 import numpy as np
 import open3d as o3d
+import os
+import cv2
 
 diffusionlight_img_size = 1024
 diffusionlight_ball_radius = 256 // 2
@@ -7,6 +9,12 @@ voxel_size = 0.005
 print("Voxel size:", voxel_size)
 
 data = np.load("intermediate/depth_vggt/data.npz")
+if os.path.isfile("intermediate/LEDiff/hdr.npy"):
+    has_hdr = True
+    hdr = np.load("intermediate/LEDiff/hdr.npy")
+else:
+    has_hdr = False
+    print("No HDR files found, generating LDR pointcloud")
 
 extrinsic = data["extrinsic"]
 intrinsic = data["intrinsic"]
@@ -15,13 +23,27 @@ conf = data["depth_conf"]
 points = data["points_unproj"]
 imgs = data["images"]
 # Quantile 0.1 keeps 90% of points
-threshold = np.quantile(conf, 0.1)
+threshold = np.quantile(conf, 0.3)
 mask = conf > threshold
 points_filtered = points[mask]
 print("Total points:", points_filtered.shape[0])
 
 # Calculate ball centres in world coordinates:
 N, image_height, image_width, _ = imgs.shape
+
+if has_hdr:
+    #Resize HDRs:
+    resized_hdr = []
+    for frame in hdr:
+        resized = cv2.resize(
+            frame.astype("float32"),
+            (image_width, image_height),
+            interpolation=cv2.INTER_CUBIC
+        )
+        resized_hdr.append(resized)
+    hdr = np.stack(resized_hdr)
+
+# Find ball geometry:
 # intrinsic matrix = [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
 fx = intrinsic[:, 0, 0] # (N,)
 fy = intrinsic[:, 1, 1] # (N,)
@@ -61,24 +83,3 @@ pcd = pcd.voxel_down_sample(voxel_size=voxel_size)
 o3d.io.write_point_cloud("intermediate/depth_vggt/pointcloud.ply", pcd)
 np.save("intermediate/depth_vggt/voxel_size.npy", np.array(voxel_size))
 print("Downsampled points:", len(pcd.points))
-
-# Visualise spheres for sanity check:
-"""sphere_points = []
-
-for c, r in zip(ball_centres, ball_radii):
-    mesh = o3d.geometry.TriangleMesh.create_sphere(radius=r)
-    mesh.translate(c)
-
-    # sample points on surface
-    pts = mesh.sample_points_uniformly(number_of_points=1000)
-    sphere_points.append(np.asarray(pts.points))
-
-sphere_points = np.vstack(sphere_points)
-
-sphere_pcd = o3d.geometry.PointCloud()
-sphere_pcd.points = o3d.utility.Vector3dVector(sphere_points)
-sphere_pcd.paint_uniform_color([1, 0, 0])
-
-combined_pcd = pcd + sphere_pcd
-
-o3d.io.write_point_cloud("scene_with_spheres.ply", combined_pcd)"""

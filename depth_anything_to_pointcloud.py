@@ -6,10 +6,12 @@ depths = np.load(f"intermediate/depth/raw/depth.npy")
 intrinsics = np.load(f"intermediate/depth/raw/intrinsics.npy")
 extrinsics = np.load(f"intermediate/depth/raw/extrinsics.npy")
 conf = np.load(f"intermediate/depth/raw/conf.npy")
-# Filters top 95% of confidence, but ideally we want to weight point using confidence
-# thresholds = np.percentile(conf, 5, axis=(1, 2), keepdims=True)
-# conf_mask = conf > thresholds
+# Filters by confidence (5 = top 95% of points)
+thresholds = np.percentile(conf, 1, axis=(1, 2), keepdims=True)
+conf_mask = conf > thresholds
 num_images, image_height, image_width = depths.shape
+
+voxel_size = 0.05
 
 print("Extracting values")
 u, v = np.meshgrid(np.arange(image_width), np.arange(image_height))
@@ -31,9 +33,12 @@ R = extrinsics[:, :3, :3]
 t = extrinsics[:, :3, 3]
 
 print("Calculating world points")
+R_inv = np.transpose(R, (0, 2, 1))  # R^T
+t_inv = -np.einsum('nij,nj->ni', R_inv, t)  # -R^T t
+
 points_world = (
-    R[:, None, None, :, :] @ points_cam[..., None]
-).squeeze(-1) + t[:, None, None, :]
+    R_inv[:, None, None, :, :] @ points_cam[..., None]
+).squeeze(-1) + t_inv[:, None, None, :]
 
 points_world = points_world.reshape(-1, 3)
 
@@ -42,12 +47,12 @@ pts = points_world.reshape(-1, 3)
 conf_flat = conf.reshape(-1)
 depth_flat = depths.reshape(-1)
 # min_depth = np.percentile(depths, 5)
-# conf_mask_flat = conf_mask.reshape(-1)
+conf_mask_flat = conf_mask.reshape(-1)
 valid = (
     np.isfinite(pts).all(axis=1)
      & (conf_flat > 0)
      # & (depth_flat > min_depth)
-     # & conf_mask_flat
+     & conf_mask_flat
 )
 pts = pts[valid]
 conf_flat = conf_flat[valid]
@@ -57,12 +62,12 @@ pcd = o3d.geometry.PointCloud()
 pcd.points = o3d.utility.Vector3dVector(pts)
 
 # Colour by confidence:
-# conf_norm = (conf_flat - conf_flat.min()) / (conf_flat.max() - conf_flat.min() + 1e-8)
-# colors = np.stack([conf_norm, 0.5 * conf_norm, 1 - conf_norm], axis=1)
-# pcd.colors = o3d.utility.Vector3dVector(colors)
+conf_norm = (conf_flat - conf_flat.min()) / (conf_flat.max() - conf_flat.min() + 1e-8)
+colors = np.stack([conf_norm, 0.5 * conf_norm, 1 - conf_norm], axis=1)
+pcd.colors = o3d.utility.Vector3dVector(colors)
 
 print("Downsampling")
-pcd = pcd.voxel_down_sample(voxel_size=0.05)
+pcd = pcd.voxel_down_sample(voxel_size=voxel_size)
 
 print("Removing outliers")
 pcd, _ = pcd.remove_statistical_outlier(
