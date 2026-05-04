@@ -23,8 +23,8 @@ conf = data["depth_conf"]
 points = data["points_unproj"]
 imgs = data["images"]
 # Quantile 0.1 keeps 90% of points
-threshold = np.quantile(conf, 0.3)
-mask = conf > threshold
+threshold = np.quantile(conf * depth[..., 0], 0.1)
+mask = (conf * depth[..., 0]) > threshold
 points_filtered = points[mask]
 print("Total points:", points_filtered.shape[0])
 
@@ -81,5 +81,19 @@ pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64))
 pcd = pcd.voxel_down_sample(voxel_size=voxel_size)
 
 o3d.io.write_point_cloud("intermediate/depth_vggt/pointcloud.ply", pcd)
+
 np.save("intermediate/depth_vggt/voxel_size.npy", np.array(voxel_size))
 print("Downsampled points:", len(pcd.points))
+
+"""# Visualise a sphere at custom coordinates:
+print(np.min(points_filtered, axis=0), np.max(points_filtered, axis=0))
+sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.1)
+sphere.translate([0., 0., 1.])
+# sample points on sphere
+sphere_pcd = sphere.sample_points_uniformly(number_of_points=2000)
+# color it red
+sphere_colors = np.tile([1, 0, 0], (np.asarray(sphere_pcd.points).shape[0], 1))
+sphere_pcd.colors = o3d.utility.Vector3dVector(sphere_colors)
+# combine with your point cloud
+combined = pcd + sphere_pcd
+o3d.io.write_point_cloud("intermediate/depth_vggt/pointcloud_with_sphere.ply", combined)"""

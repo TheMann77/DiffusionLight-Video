@@ -59,6 +59,9 @@ def create_argparser():
 
     parser.add_argument('--one_seed', dest='one_seed', action='store_true', help="use the same seed for all images")
     parser.set_defaults(one_seed=False)
+
+    parser.add_argument('--hide-seed-label', dest='label_seed', action='store_false', help="don't label the files with the seed name")
+    parser.set_defaults(label_seed=True)
     
     parser.add_argument('--no_controlnet', dest='use_controlnet', action='store_false', help='by default we using controlnet, we have the option to disable it to see the difference')
     parser.set_defaults(use_controlnet=True)
@@ -359,19 +362,20 @@ def main():
 
                 start_time = time.time()
                 # set seed, if seed auto we use file name as seed
+                outpng = f"{outname}.png"
+                cache_name = f"{outname}"
                 if seed == "auto":
                     if args.one_seed:
                         folder_name = os.path.dirname(os.path.abspath(image_path))
                         seed = name2hash(folder_name)
                     else:
                         filename = os.path.basename(image_path).split(".")[0]
-                        seed = name2hash(filename) 
-                    outpng = f"{outname}.png"
-                    cache_name = f"{outname}"
+                        seed = name2hash(filename)
                 else:
                     seed = int(seed)
-                    outpng = f"{outname}_seed{seed}.png"
-                    cache_name = f"{outname}_seed{seed}"
+                    if args.label_seed:
+                        outpng = f"{outname}_seed{seed}.png"
+                        cache_name = f"{outname}_seed{seed}"
                 # skip if file exist, useful for resuming
                 if os.path.exists(os.path.join(raw_output_dir, outpng)):
                     continue
