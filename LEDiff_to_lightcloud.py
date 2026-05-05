@@ -9,7 +9,7 @@ alg_type = "torch" # numpy or torch
 
 # w, h = width/height of HDR images, from LEDiff output
 # F = number of input frames into LEDiff and VGGT
-hdrs = np.load("intermediate/LEDiff/hdr.npy") # (F, h, w, 3)
+hdrs_bgr = np.load("intermediate/LEDiff/hdr_bgr.npy") # (F, h, w, 3)
 pcd = o3d.io.read_point_cloud("intermediate/depth_vggt/pointcloud.ply")
 data = np.load("intermediate/depth_vggt/data.npz")
 voxel_size = np.load("intermediate/depth_vggt/voxel_size.npy").item()
@@ -32,12 +32,13 @@ O_world = -np.einsum("fji,fj->fi", R, t) # (F, 3)
 K_inv = np.linalg.inv(intrinsics)
 
 p, _ = pointcloud.shape
-f, h, w, _ = hdrs.shape
+f, h, w, _ = hdrs_bgr.shape
 F, H, W, _ = depths.shape
 assert f == F, "Number of frames inputted to LEDiff and VGGT must be equal"
+# Resize HDRs and convert from BGR to RGB
 hdrs = np.stack([
-    cv2.resize(hdr, (W, H), interpolation=cv2.INTER_CUBIC)
-    for hdr in hdrs
+    cv2.resize(hdr[..., ::-1], (W, H), interpolation=cv2.INTER_CUBIC)
+    for hdr in hdrs_bgr
 ], axis=0) # (F, H, W, 3)
 h, w = H, W
 

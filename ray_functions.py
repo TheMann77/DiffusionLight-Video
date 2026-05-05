@@ -4,6 +4,8 @@ import OpenEXR
 import Imath
 import open3d as o3d
 from scipy.spatial import cKDTree
+from scipy.ndimage import map_coordinates
+from tqdm import tqdm
 
 def load_exr(path):
     exr = OpenEXR.InputFile(path)
@@ -682,3 +684,199 @@ def smooth_pointcloud_colors(
         o3d.io.write_point_cloud(output_path, pcd)
 
     return rgb_new, rgb_ldr
+
+def build_envmaps_from_lightcloud(
+        envmap_positions, # (n, 3)
+        lightcloud, # (p, 6)
+        voxel_size, # float
+        envmap_shape, # (h, w)
+        alg_type="torch", # numpy or torch
+):
+    pointcloud = lightcloud[:, :3]
+    point_colors = lightcloud[:, 3:]
+
+    n, _ = envmap_positions.shape
+    h, w = envmap_shape
+
+    print("Setting up voxel grid")
+    # Build a voxel grid around pointcloud, assuming each point is centre of a voxel
+    grid_min = pointcloud.min(axis=0) - 0.5 * voxel_size
+    grid_max = pointcloud.max(axis=0) + 0.5 * voxel_size
+    grid_shape = np.ceil((grid_max - grid_min) / voxel_size).astype(np.int64)
+
+    if alg_type == "numpy":
+        voxel_lookup = build_voxel_lookup(pointcloud, grid_min, voxel_size, grid_shape)
+        occupied_flat_sorted=voxel_lookup["flat_sorted"]
+        occupied_point_indices_sorted=voxel_lookup["point_indices_sorted"]
+        occupied_voxel_indices_sorted=voxel_lookup["voxel_indices_sorted"]
+        occupied_voxel_centres_sorted=voxel_lookup["voxel_centres_sorted"]
+    elif alg_type == "torch":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cpu":
+            print("CUDA not available, running on CPU")
+        grid = build_gpu_grid(pointcloud, grid_min, voxel_size, grid_shape)
+    
+        
+    # (x, y) are coordinates in the new envmap
+    # D_P is the 3D direction that the coordinates represent
+    # P is the origin of the new envmap (in envmap_positions)
+    # X_out(mu) = P + mu * D_P; is the ray from P
+    # We generate the envmap in world coordinate space
+
+    xs = np.arange(w)
+    ys = np.arange(h)
+    theta = 2.0 * np.pi * xs / (w - 1)
+    phi = np.pi * ys / (h - 1)
+    theta_grid, phi_grid = np.meshgrid(theta, phi, indexing="xy") # (h, w)
+    sin_phi, cos_phi, sin_theta, cos_theta = np.sin(phi_grid), np.cos(phi_grid), np.sin(theta_grid), np.cos(theta_grid)
+    D_P = np.stack(
+        [
+            sin_phi * cos_theta,
+            sin_phi * sin_theta,
+            cos_phi,
+        ],
+        axis=-1,
+    )  # (h, w, 3)
+    D_P_flat = D_P.reshape(-1, 3)
+
+    envmaps = np.zeros((n, h, w, 3))
+
+    print("Generating environment maps:")
+    for i, envmap_position in enumerate(tqdm(envmap_positions)):
+        if alg_type == "numpy":
+            intersection_result = ray_pointcloud_intersection_batch(
+                P_batch=np.broadcast_to(envmap_position, (h*w, 3)),
+                D_batch=D_P_flat,
+                grid_min=grid_min,
+                grid_max=grid_max,
+                grid_shape=grid_shape,
+                voxel_size=voxel_size,
+                occupied_flat_sorted=occupied_flat_sorted,
+                occupied_point_indices_sorted=occupied_point_indices_sorted,
+                occupied_voxel_indices_sorted=occupied_voxel_indices_sorted,
+                occupied_voxel_centres_sorted=occupied_voxel_centres_sorted,
+            )
+            hit_mask = intersection_result["hit_mask"]
+            hit_point_indices = intersection_result["point_index"]
+            dist2 = intersection_result["mu"][hit_mask] ** 2
+
+        if alg_type == "torch":
+            P_batch = torch.from_numpy(
+                np.broadcast_to(envmap_position, (h*w, 3)).copy()
+            ).float().to(device)
+            D_batch = torch.from_numpy(D_P_flat).float().to(device)
+            intersection_result = ray_pointcloud_intersection_batch_torch(
+                P=P_batch,
+                D=D_batch,
+                grid=grid,
+            )
+            hit_mask = intersection_result["hit_mask"]
+            hit_point_indices = intersection_result["point_index"].cpu().numpy()
+            dist2 = intersection_result["mu"][hit_mask].cpu().numpy() ** 2
+
+        idx = hit_point_indices.reshape(h, w)
+        valid = idx >= 0
+        envmaps[i][valid] = point_colors[idx[valid]] / dist2[:, None]
+    return envmaps
+
+def dir_to_uv(d):
+    x, y, z = d[..., 0], d[..., 1], d[..., 2]
+    theta = np.arctan2(y, x)
+    theta = (theta + 2 * np.pi) % (2 * np.pi)
+    u = theta / (2 * np.pi)
+
+    phi = np.arccos(np.clip(z, -1.0, 1.0))
+    v = phi / np.pi
+    return u, v
+
+def rotate_envmap_camera_to_world(env_cam, R_wc):
+    """
+    env_cam: (H, W, 3) equirectangular map in camera coordinates
+    R_wc:    (3, 3) world-to-camera rotation
+    returns: (H, W, 3) envmap in world coordinates
+    """
+    H, W, _ = env_cam.shape
+
+    # Output grid: world directions
+    uu, vv = np.meshgrid(
+        np.linspace(0, 1, W, endpoint=False),
+        np.linspace(0, 1, H, endpoint=False),
+        indexing="xy",
+    )
+
+    theta = 2 * np.pi * uu
+    phi = np.pi * vv
+
+    d_world = np.stack([
+        np.sin(phi) * np.cos(theta),
+        np.sin(phi) * np.sin(theta),
+        np.cos(phi),
+    ], axis=-1)  # (H, W, 3)
+
+    # Rotate world directions into camera space
+    d_cam = d_world @ R_wc.T  # equivalent to R_wc @ d_world^T per pixel
+
+    # Convert camera directions back to UV in the source envmap
+    u, v = dir_to_uv(d_cam)
+
+    x = u * W
+    y = v * H
+
+    # Sample each channel
+    env_world = np.zeros_like(env_cam)
+    for c in range(3):
+        env_world[..., c] = map_coordinates(
+            env_cam[..., c],
+            [y.ravel(), x.ravel()],
+            order=1,
+            mode="wrap",
+        ).reshape(H, W)
+
+    return env_world
+
+def fill_missing_pixels(images, k=10, weighted=True):
+    """
+    Fill pixels whose RGB is all zero using nearby coloured pixels.
+
+    images: (n, h, w, 3) array
+    k: number of nearest neighbours to use
+    weighted: if True, use inverse-distance weighting
+    """
+    images = images.copy()
+    n, h, w, c = images.shape
+    assert c == 3
+
+    yy, xx = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")
+    coords = np.stack([yy, xx], axis=-1).reshape(-1, 2)  # (h*w, 2)
+
+    for i in range(n):
+        img = images[i]
+        flat = img.reshape(-1, 3)
+
+        missing = np.all(flat == 0, axis=1)
+        coloured = ~missing
+
+        if not np.any(missing) or not np.any(coloured):
+            continue
+
+        tree = cKDTree(coords[coloured])
+        dists, idxs = tree.query(coords[missing], k=min(k, coloured.sum()))
+
+        # Make sure shapes are always 2D
+        if k == 1 or dists.ndim == 1:
+            dists = dists[:, None]
+            idxs = idxs[:, None]
+
+        neighbour_rgb = flat[coloured][idxs]  # (num_missing, k, 3)
+
+        if weighted:
+            weights = 1.0 / np.maximum(dists, 1e-8)
+            weights /= weights.sum(axis=1, keepdims=True)
+            filled = np.sum(neighbour_rgb * weights[..., None], axis=1)
+        else:
+            filled = np.mean(neighbour_rgb, axis=1)
+
+        flat[missing] = filled
+        images[i] = flat.reshape(h, w, 3)
+
+    return images
