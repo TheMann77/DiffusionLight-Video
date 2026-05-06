@@ -2,14 +2,13 @@ import numpy as np
 import ezexr
 from ray_functions import *
 
-ball_type = "smooth"
+ball_type = "naive"
 alg_type = "torch" # numpy or torch
 relative_envmap_positions = np.asarray([[.5, .7, .6], [.5, .7, .5], [.5, .7, .7]])
 
 print("Loading files")
 lightcloud = np.load(f"output/LEDiff/lightcloud.npy") # (p, 6)
 missing_envmap = load_exr(f"output/{ball_type}/missing_envmap.exr") # (h, w)
-hitting_envmap = load_exr(f"output/{ball_type}/hitting_envmap.exr") # (h, w)
 voxel_size = np.load("intermediate/depth_vggt/voxel_size.npy").item()
 lightcloud_downscale = np.load(f"output/{ball_type}/lightcloud_downscale.npy").item()
 
@@ -37,7 +36,6 @@ envmaps = build_envmaps_from_lightcloud(
 # Replace missing values with missing_envmap
 mask = np.all(envmaps == 0, axis=-1, keepdims=True)  # (n, h, w, 1)
 envmaps = np.where(mask, missing_envmap[None, ...], envmaps)
-
 envmaps = fill_missing_pixels(envmaps)
     
 for i, envmap in enumerate(envmaps):

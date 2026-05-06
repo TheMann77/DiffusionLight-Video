@@ -145,7 +145,12 @@ python video_to_frames.py --video_file intermediate/depth_video/raw/example_vis.
 Generate depthmaps, pointcloud and lightcloud:
 Run `run_vggt.py`
 Run `vggt_to_pointcloud.py`
-Run `generate_lightcloud.py` with `ball_type="naive"`, or `"smooth"`, `"one-seed"`
+
+### Generate output
+Run `diffusionLight_to_lightcloud.py` with `ball_type="naive"`, or `"smooth"`, `"one-seed"`
+Run `LEDiff_to_lightcloud.py`
+Run `scale_lightcloud.py` with `ball_type` again
+Run `make_final_envmap.py` with `ball_type` again, and set `relative_envmap_positions` for where in the scene you want to calculate.
 
 
 # Attribution

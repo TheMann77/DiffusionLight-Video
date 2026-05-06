@@ -3,7 +3,7 @@ import glob, os
 from natsort import natsorted
 from ray_functions import *
 
-ball_type = "smooth"
+ball_type = "naive"
 alg_type = "torch" # numpy or torch
 
 print("Loading files")

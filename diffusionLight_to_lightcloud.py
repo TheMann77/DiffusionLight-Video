@@ -70,24 +70,11 @@ pointcloud_hit_intensities = [[] for _ in range(p)]
 # X_in(lambda) = O + lambda * D_in; is the ray from the camera to P
 # X_out(mu) = P + mu * D_out; is the reflected ray from P
 
-xs = np.arange(w)
-ys = np.arange(h)
-theta = 2.0 * np.pi * xs / (w - 1)
-phi = np.pi * ys / (h - 1)
-theta_grid, phi_grid = np.meshgrid(theta, phi, indexing="xy") # (h, w)
-sin_phi, cos_phi, sin_theta, cos_theta = np.sin(phi_grid), np.cos(phi_grid), np.sin(theta_grid), np.cos(theta_grid)
-D_P = np.stack(
-    [
-        sin_phi * cos_theta,
-        sin_phi * sin_theta,
-        cos_phi,
-    ],
-    axis=-1,
-)  # (h, w, 3)
-V = np.array([1.0, 0.0, 0.0])
-N_cam = D_P + V
+D_P, D_P_flat = envmap_to_directions(w, h)
+
+V = np.array([0.0, 0.0, 1.0])
+N_cam = D_P - V
 N_cam_norm = np.linalg.norm(N_cam, axis=-1, keepdims=True)
-valid_env = N_cam_norm[..., 0] > 1e-12
 N_cam = np.divide(
     N_cam,
     N_cam_norm,
@@ -95,12 +82,9 @@ N_cam = np.divide(
     where=N_cam_norm > 1e-12,
 )
 N_cam_flat = N_cam.reshape(-1, 3)
-valid_env_flat = valid_env.reshape(-1)
 
 envmap_missing_sum = np.zeros((256, 512, 3))
 envmap_missing_count = np.zeros((256, 512))
-envmap_hitting_sum = np.zeros((256, 512, 3))
-envmap_hitting_count = np.zeros((256, 512))
 
 print("Iterating frames:")
 for frame in tqdm(range(F)):
@@ -109,7 +93,7 @@ for frame in tqdm(range(F)):
     C_ball = ball_centres[frame]
     r_ball = ball_radii[frame]
     O_world = -R.T @ t
-    N_world_flat = N_cam_flat @ R.T
+    N_world_flat = N_cam_flat @ R
     N_world_flat /= (
         np.linalg.norm(N_world_flat, axis=1, keepdims=True) + 1e-12
     )
@@ -124,15 +108,15 @@ for frame in tqdm(range(F)):
         np.linalg.norm(D_out_flat, axis=1, keepdims=True) + 1e-12
     )
 
-    D_P_flat = D_P.reshape(-1, 3)
-    D_P_world_flat = D_P_flat @ R.T
+    D_P_world_flat = D_P_flat @ R
 
     env_flat = envmaps[frame].reshape(-1, envmaps.shape[-1])
 
     if alg_type == "numpy":
         intersection_result = ray_pointcloud_intersection_batch(
             P_batch=P_world_flat,
-            D_batch=D_out_flat,
+            #D_batch=D_out_flat,
+            D_batch=D_P_world_flat,
             grid_min=grid_min,
             grid_max=grid_max,
             grid_shape=grid_shape,
@@ -164,7 +148,8 @@ for frame in tqdm(range(F)):
 
     if alg_type == "torch":
         P_batch = torch.from_numpy(P_world_flat).float().to(device)
-        D_batch = torch.from_numpy(D_out_flat).float().to(device)
+        # D_batch = torch.from_numpy(D_out_flat).float().to(device)
+        D_batch = torch.from_numpy(D_P_world_flat).float().to(device)
         intersection_result = ray_pointcloud_intersection_batch_torch(
             P=P_batch,
             D=D_batch,
@@ -198,38 +183,17 @@ for frame in tqdm(range(F)):
     if alg_type == "torch":
         miss_mask = ~hit_mask.cpu().numpy()
     # Find rays which missed
-    D_miss = D_out_flat[miss_mask]
+    # D_miss = D_out_flat[miss_mask]
+    D_miss = D_P_world_flat[miss_mask]
     env_miss = env_flat[miss_mask]
     # Convert to envmap coordinates to build backup envmap
-    x_miss, y_miss, z_miss = D_miss[:, 0], D_miss[:, 1], D_miss[:, 2]
-    theta_miss = np.arctan2(y_miss, x_miss)
-    phi_miss = np.arccos(z_miss)
-    theta_miss = np.mod(theta_miss, 2 * np.pi)
-    u_miss = theta_miss / (2 * np.pi)
-    v_miss = phi_miss / np.pi
+    u_miss, v_miss = directions_to_envmap(D_miss)
     px_miss = (u_miss * 512).astype(int)
     py_miss = (v_miss * 256).astype(int)
     px_miss = np.clip(px_miss, 0, 512 - 1)
     py_miss = np.clip(py_miss, 0, 256 - 1)
     np.add.at(envmap_missing_sum, (py_miss, px_miss), env_miss)
     np.add.at(envmap_missing_count, (py_miss, px_miss), 1)
-
-    # Find rays which hit
-    D_hit = D_out_flat[~miss_mask]
-    env_hit = env_flat[~miss_mask]
-    # Convert to envmap coordinates to build backup envmap
-    x_hit, y_hit, z_hit = D_hit[:, 0], D_hit[:, 1], D_hit[:, 2]
-    theta_hit = np.arctan2(y_hit, x_hit)
-    phi_hit = np.arccos(z_hit)
-    theta_hit = np.mod(theta_hit, 2 * np.pi)
-    u_hit = theta_hit / (2 * np.pi)
-    v_hit = phi_hit / np.pi
-    px_hit = (u_hit * 512).astype(int)
-    py_hit = (v_hit * 256).astype(int)
-    px_hit = np.clip(px_hit, 0, 512 - 1)
-    py_hit = np.clip(py_hit, 0, 256 - 1)
-    np.add.at(envmap_hitting_sum, (py_hit, px_hit), env_hit)
-    np.add.at(envmap_hitting_count, (py_hit, px_hit), 1)
 
 if alg_type == "torch":
     pointcloud_sum_intensities = pointcloud_sum_intensities_torch.cpu().numpy()
@@ -255,7 +219,6 @@ lightcloud = np.concatenate(
 )
 
 envmap_missing_avg = (envmap_missing_sum / np.maximum(envmap_missing_count[..., None], 1)).astype(np.float32)
-envmap_hitting_avg = (envmap_hitting_sum / np.maximum(envmap_hitting_count[..., None], 1)).astype(np.float32)
 
 os.makedirs(f"output/{ball_type}", exist_ok=True)
 
@@ -302,4 +265,3 @@ pcd.colors = o3d.utility.Vector3dVector(rgb_ldr)
 o3d.io.write_point_cloud(f"output/{ball_type}/coloured_lightcloud.ply", pcd)
 
 ezexr.imwrite(f"output/{ball_type}/missing_envmap.exr", envmap_missing_avg)
-ezexr.imwrite(f"output/{ball_type}/hitting_envmap.exr", envmap_hitting_avg)

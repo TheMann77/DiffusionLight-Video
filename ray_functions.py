@@ -685,6 +685,34 @@ def smooth_pointcloud_colors(
 
     return rgb_new, rgb_ldr
 
+def envmap_to_directions(w, h):
+    xs = np.arange(w)
+    ys = np.arange(h)
+    theta = 2.0 * np.pi * xs / w
+    phi = np.pi * ys / h
+    theta_grid, phi_grid = np.meshgrid(theta, phi, indexing="xy") # (h, w)
+    sin_phi, cos_phi, sin_theta, cos_theta = np.sin(phi_grid), np.cos(phi_grid), np.sin(theta_grid), np.cos(theta_grid)
+    D_P = np.stack(
+        [
+            - sin_theta * sin_phi,
+            - cos_phi,
+            - cos_theta * sin_phi,
+        ],
+        axis=-1,
+    )  # (h, w, 3)
+    D_P_flat = D_P.reshape(-1, 3)
+    return D_P, D_P_flat
+
+def directions_to_envmap(d):
+    x, y, z = d[..., 0], d[..., 1], d[..., 2]
+    theta = np.arctan2(-x, -z)
+    phi = np.arccos(-y)
+    theta = np.mod(theta, 2 * np.pi)
+    phi = np.mod(phi, np.pi)
+    u = theta / (2 * np.pi)
+    v = phi / np.pi
+    return u, v
+
 def build_envmaps_from_lightcloud(
         envmap_positions, # (n, 3)
         lightcloud, # (p, 6)
@@ -723,21 +751,7 @@ def build_envmaps_from_lightcloud(
     # X_out(mu) = P + mu * D_P; is the ray from P
     # We generate the envmap in world coordinate space
 
-    xs = np.arange(w)
-    ys = np.arange(h)
-    theta = 2.0 * np.pi * xs / (w - 1)
-    phi = np.pi * ys / (h - 1)
-    theta_grid, phi_grid = np.meshgrid(theta, phi, indexing="xy") # (h, w)
-    sin_phi, cos_phi, sin_theta, cos_theta = np.sin(phi_grid), np.cos(phi_grid), np.sin(theta_grid), np.cos(theta_grid)
-    D_P = np.stack(
-        [
-            sin_phi * cos_theta,
-            sin_phi * sin_theta,
-            cos_phi,
-        ],
-        axis=-1,
-    )  # (h, w, 3)
-    D_P_flat = D_P.reshape(-1, 3)
+    _, D_P_flat = envmap_to_directions(w, h)
 
     envmaps = np.zeros((n, h, w, 3))
 
@@ -779,16 +793,6 @@ def build_envmaps_from_lightcloud(
         envmaps[i][valid] = point_colors[idx[valid]] / dist2[:, None]
     return envmaps
 
-def dir_to_uv(d):
-    x, y, z = d[..., 0], d[..., 1], d[..., 2]
-    theta = np.arctan2(y, x)
-    theta = (theta + 2 * np.pi) % (2 * np.pi)
-    u = theta / (2 * np.pi)
-
-    phi = np.arccos(np.clip(z, -1.0, 1.0))
-    v = phi / np.pi
-    return u, v
-
 def rotate_envmap_camera_to_world(env_cam, R_wc):
     """
     env_cam: (H, W, 3) equirectangular map in camera coordinates
@@ -817,7 +821,7 @@ def rotate_envmap_camera_to_world(env_cam, R_wc):
     d_cam = d_world @ R_wc.T  # equivalent to R_wc @ d_world^T per pixel
 
     # Convert camera directions back to UV in the source envmap
-    u, v = dir_to_uv(d_cam)
+    u, v = directions_to_envmap(d_cam)
 
     x = u * W
     y = v * H
