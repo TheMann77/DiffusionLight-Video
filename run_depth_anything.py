@@ -4,9 +4,12 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 torch.cuda.empty_cache()
 from depth_anything_3.api import DepthAnything3
+import argparse
 from natsort import natsorted
 import numpy as np
 from tqdm import tqdm
+
+# Requires depthanything environment
 
 def unpad(img_files, original_frame, padded=True):
     #If padded is true, assumes file is 1024x1024
@@ -65,7 +68,6 @@ def to_homogeneous(T):
     out[..., :3, :4] = T
     out[..., 3, 3] = 1.0
     return out
-
 
 def from_homogeneous(T):
     return T[..., :3, :4]
@@ -219,71 +221,95 @@ def invert_extrinsics(T):
 
     return T_inv
 
-batch_size = 32
-stride = batch_size // 2
-save_pngs = True
+def run_depth_anything(
+        frames_folder,
+        output_folder,
+        batch_size=32,
+        save_pngs=False,
+):
+    stride = batch_size // 2
 
-frames_path = "input/example"
-output_name = "raw"
-original_path = "input/example/example0.png"
+    file_filter = "*.png"
+    image_files = natsorted(glob.glob(os.path.join(frames_folder, file_filter)))
+    images = unpad(image_files, image_files[0], False)
+    num_images, (image_height, image_width, _) = len(images), images[0].shape
+    os.makedirs(output_folder, exist_ok=True)
+    if save_pngs:
+        os.makedirs(f"{output_folder}/frames", exist_ok=True)
 
-file_filter = "*.png"
-images = unpad(natsorted(glob.glob(os.path.join(frames_path, file_filter))), original_path, False)
-num_images, (image_height, image_width, _) = len(images), images[0].shape
-if save_pngs:
-    os.makedirs(f"intermediate/depth_frames/{output_name}/raw", exist_ok=True)
-os.makedirs(f"intermediate/depth/{output_name}", exist_ok=True)
+    results = []
 
-results = []
+    device = torch.device("cuda")
+    model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE")
+    model = model.to(device=device)
+    model.eval()
 
-device = torch.device("cuda")
-model = DepthAnything3.from_pretrained("depth-anything/DA3NESTED-GIANT-LARGE")
-model = model.to(device=device)
-model.eval()
+    for start, end in tqdm(make_sliding_windows(num_images, window_size=batch_size, stride=stride)):
+        batch = images[start:end]
 
-for start, end in tqdm(make_sliding_windows(num_images, window_size=batch_size, stride=stride)):
-    batch = images[start:end]
+        with torch.inference_mode():
+            pred = model.inference(batch, process_res=1024)
+        
+        depths = pred.depth.copy()
+        confs = pred.conf.copy()
 
-    with torch.inference_mode():
-        pred = model.inference(batch, process_res=1024)
-    
-    depths = pred.depth.copy()
-    confs = pred.conf.copy()
+        resize_frames(depths, image_width, image_height)
+        resize_frames(confs, image_width, image_height)
 
-    resize_frames(depths, image_width, image_height)
-    resize_frames(confs, image_width, image_height)
+        results.append({
+            "start": start,
+            "end": end,
+            "depth": depths,
+            "intrinsics": np.asarray(pred.intrinsics),
+            "extrinsics": np.asarray(pred.extrinsics),
+            "conf": confs,
+        })
 
-    results.append({
-        "start": start,
-        "end": end,
-        "depth": depths,
-        "intrinsics": np.asarray(pred.intrinsics),
-        "extrinsics": np.asarray(pred.extrinsics),
-        "conf": confs,
-    })
+        del pred
+        torch.cuda.empty_cache()
 
-    del pred
-    torch.cuda.empty_cache()
-
-depth, intrinsics, extrinsics, conf = (
-    align_windows_to_global(
-        results,
-        num_frames=num_images,
-        use_scale_alignment=True,
-    )
-)
-
-if save_pngs:
-    for i in range(depth.shape[0]):
-        d = depth[i]
-        d_norm = (d - depth.min()) / (depth.max() - depth.min() + 1e-8)
-        d_uint8 = (d_norm * 255).astype(np.uint8)
-        cv2.imwrite(
-            f"intermediate/depth_frames/{output_name}/raw/depth_{i}.png",
-            d_uint8
+    depth, intrinsics, extrinsics, conf = (
+        align_windows_to_global(
+            results,
+            num_frames=num_images,
+            use_scale_alignment=True,
         )
+    )
 
-np.save(f"intermediate/depth/{output_name}/depth.npy", depth)
-np.save(f"intermediate/depth/{output_name}/extrinsics.npy", extrinsics)
-np.save(f"intermediate/depth/{output_name}/intrinsics.npy", intrinsics)
-np.save(f"intermediate/depth/{output_name}/conf.npy", conf)
+    if save_pngs:
+        for i in range(depth.shape[0]):
+            d = depth[i]
+            d_norm = (d - depth.min()) / (depth.max() - depth.min() + 1e-8)
+            d_uint8 = (d_norm * 255).astype(np.uint8)
+            cv2.imwrite(
+                f"{output_folder}/frames/depth_{i}.png",
+                d_uint8
+            )
+
+    np.savez_compressed(f"{output_folder}/data.npz", 
+                        extrinsic=extrinsics,
+                        intrinsic=extrinsics,
+                        depth=depth,
+                        depth_conf=conf,
+                        imgs=images,
+                        )
+
+def create_argparser():    
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--frames", type=str, default="input/example", help="folder of input .png frames")
+    parser.add_argument("--out_folder", type=str, default="final", help="The folder to place the generated depths in")
+    parser.add_argument("--batch_size", type=int, default=32, help="number of frames per batch, reduce if memory runs out")
+    parser.add_argument("--save_pngs", dest="save_pngs", action='store_true', help="save the per-frame depth pngs")
+    parser.set_defaults(save_pngs=False)
+
+    return parser
+
+if __name__ == "__main__":
+    args = create_argparser().parse_args()
+    run_depth_anything(
+        frames_folder=args.frames,
+        output_folder=args.out_folder,
+        batch_size=args.batch_size,
+        save_pngs=args.save_pngs,
+    )

@@ -4,24 +4,8 @@ import OpenEXR
 import Imath
 import open3d as o3d
 from scipy.spatial import cKDTree
-from scipy.ndimage import map_coordinates
+from PIL import Image
 from tqdm import tqdm
-
-def load_exr(path):
-    exr = OpenEXR.InputFile(path)
-    header = exr.header()
-
-    dw = header['dataWindow']
-    width = dw.max.x - dw.min.x + 1
-    height = dw.max.y - dw.min.y + 1
-
-    pt = Imath.PixelType(Imath.PixelType.FLOAT)
-
-    r = np.frombuffer(exr.channel('R', pt), dtype=np.float32).reshape(height, width)
-    g = np.frombuffer(exr.channel('G', pt), dtype=np.float32).reshape(height, width)
-    b = np.frombuffer(exr.channel('B', pt), dtype=np.float32).reshape(height, width)
-    img = np.stack([r, g, b], axis=-1)
-    return img
 
 def build_voxel_lookup(pointcloud, grid_min, voxel_size, grid_shape):
     voxel_indices = np.floor((pointcloud - grid_min[None, :]) / voxel_size).astype(np.int64)
@@ -685,6 +669,22 @@ def smooth_pointcloud_colors(
 
     return rgb_new, rgb_ldr
 
+def load_exr(path):
+    exr = OpenEXR.InputFile(path)
+    header = exr.header()
+
+    dw = header['dataWindow']
+    width = dw.max.x - dw.min.x + 1
+    height = dw.max.y - dw.min.y + 1
+
+    pt = Imath.PixelType(Imath.PixelType.FLOAT)
+
+    r = np.frombuffer(exr.channel('R', pt), dtype=np.float32).reshape(height, width)
+    g = np.frombuffer(exr.channel('G', pt), dtype=np.float32).reshape(height, width)
+    b = np.frombuffer(exr.channel('B', pt), dtype=np.float32).reshape(height, width)
+    img = np.stack([r, g, b], axis=-1)
+    return img
+
 def envmap_to_directions(w, h):
     xs = np.arange(w)
     ys = np.arange(h)
@@ -795,49 +795,24 @@ def build_envmaps_from_lightcloud(
 
 def rotate_envmap_camera_to_world(env_cam, R_wc):
     """
-    env_cam: (H, W, 3) equirectangular map in camera coordinates
-    R_wc:    (3, 3) world-to-camera rotation
-    returns: (H, W, 3) envmap in world coordinates
+    env_cam: (h, w, 3) equirectangular map in camera coordinates
+    R_wc:    (3, 3) world-to-camera rotation matrix
+    returns: (h, w, 3) envmap in world coordinates
     """
-    H, W, _ = env_cam.shape
+    h, w, _ = env_cam.shape
 
-    # Output grid: world directions
-    uu, vv = np.meshgrid(
-        np.linspace(0, 1, W, endpoint=False),
-        np.linspace(0, 1, H, endpoint=False),
-        indexing="xy",
-    )
+    _, D_world_flat = envmap_to_directions(w, h)   # (h*w, 3)
+    D_cam_flat = D_world_flat @ R_wc.T
 
-    theta = 2 * np.pi * uu
-    phi = np.pi * vv
+    u, v = directions_to_envmap(D_cam_flat)
+    ui = np.round(u * (w - 1)).astype(np.int64) % w
+    vi = np.round(v * (h - 1)).astype(np.int64)
+    vi = np.clip(vi, 0, h - 1)
 
-    d_world = np.stack([
-        np.sin(phi) * np.cos(theta),
-        np.sin(phi) * np.sin(theta),
-        np.cos(phi),
-    ], axis=-1)  # (H, W, 3)
-
-    # Rotate world directions into camera space
-    d_cam = d_world @ R_wc.T  # equivalent to R_wc @ d_world^T per pixel
-
-    # Convert camera directions back to UV in the source envmap
-    u, v = directions_to_envmap(d_cam)
-
-    x = u * W
-    y = v * H
-
-    # Sample each channel
-    env_world = np.zeros_like(env_cam)
-    for c in range(3):
-        env_world[..., c] = map_coordinates(
-            env_cam[..., c],
-            [y.ravel(), x.ravel()],
-            order=1,
-            mode="wrap",
-        ).reshape(H, W)
-
+    env_world_flat = env_cam[vi, ui]
+    env_world = env_world_flat.reshape(h, w, 3)
     return env_world
-
+    
 def fill_missing_pixels(images, k=10, weighted=True):
     """
     Fill pixels whose RGB is all zero using nearby coloured pixels.
@@ -884,3 +859,37 @@ def fill_missing_pixels(images, k=10, weighted=True):
         images[i] = flat.reshape(h, w, 3)
 
     return images
+
+def save_hdr_as_ldr(hdr: np.ndarray, out_path: str, gamma: float = 2.2, exposure: float = 1.0) -> None:
+    """
+    Save an HDR float image as an LDR 8-bit image.
+
+    Parameters
+    ----------
+    hdr : np.ndarray
+        HDR image of shape (H, W, 3), assumed linear RGB.
+     out_path : str
+        Output file path, e.g. "output.png".
+    gamma : float
+        Display gamma.
+    exposure : float
+        Exposure multiplier applied before tone mapping.
+    """
+    hdr = np.asarray(hdr, dtype=np.float32)
+
+    if hdr.ndim != 3 or hdr.shape[-1] != 3:
+        raise ValueError(f"Expected shape (H, W, 3), got {hdr.shape}")
+
+    # Exposure
+    img = hdr * exposure
+
+    # Simple tone mapping
+    img = img / (1.0 + img)
+
+    # Gamma correction
+    img = np.clip(img, 0.0, 1.0)
+    img = img ** (1.0 / gamma)
+
+    # Convert to 8-bit and save
+    img8 = (img * 255.0 + 0.5).astype(np.uint8)
+    Image.fromarray(img8).save(out_path)
