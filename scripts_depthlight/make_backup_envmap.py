@@ -6,7 +6,7 @@ import glob, os, torch
 import ezexr
 from tqdm import tqdm
 import open3d as o3d
-from utility_functions import *
+from scripts_depthlight.utility_functions import *
 
 # Requires diffusionlight-video environment
 

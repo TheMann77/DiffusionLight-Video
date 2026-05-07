@@ -1,13 +1,4 @@
-# DiffusionLight-Video: Light estimation from videos using DiffusionLight with DepthAnything	
-
-## Table of contents
------
-  * [Installation](#Installation)
-  * [Getting-started](#Getting started)
-  * [Prediction](#Prediction)
-  * [Evaluation](#Evaluation)
-  * [Citation](#Citation)
-------
+# DiffusionLight-Video: Spatially Varying Light Estimation from a Video
 
 ## Installation
 
@@ -18,7 +9,7 @@ wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O mi
 bash miniconda.sh
 ```
 
-To set up the Python environments you need to run the following commands:
+To set up the Python environments you need to run the following commands (only need one of VGGT or DepthAnything unless you want to try both models):
 ```shell
 conda env create -f environments/diffusionlight.yml
 conda activate diffusionlight-video
@@ -31,6 +22,13 @@ pip install -r requirements.txt .
 pip install natsort
 cd ../
 conda deactivate
+conda create -n depthanything python=3.10.19
+conda activate depthanything
+cd Depth-Anything-3/External/Depth-Anything-3
+pip install xformers torch==2.10.0 torchvision
+pip install -e .
+cd ../../../
+conda deactivate
 conda create -n lediff python=3.10
 conda activate lediff
 cd LEDiff
@@ -42,116 +40,75 @@ cd ../../../
 conda deactivate
 ```
 Then download the Highlight Hallucination Model model from [here](https://github.com/Hans1984/LEDiff/tree/main/examples/text_to_image) and unzip to `LEDiff`.
-Note that there are three Conda envrironments, one for DiffusionLight, one for VGGT and one for LEDiff.
+Note that there are four different Conda envrironments, one for each part of the pipeline.
 
-## Getting started
+## Step 1 - DiffusionLight
 
+Make sure the input video has no border or padding
+
+Either run the following commands:
 ```shell
 conda activate diffusionlight-video
-# Convert the video into individual frames:
 python video_to_frames.py --video_file input/example.mov --output_dir input --framerate_reduction_factor 5
-# Inpaint the chrome balls frame-by-frame
-python inpaint.py --dataset input/example --output_dir intermediate/ball_frames/naive --video
-# Generate frame-by-frame environment maps
-python ball2envmap.py --ball_dir intermediate/ball_frames/naive/square --envmap_dir intermediate/ball_frames/naive/envmap
-# Reconstruct chrome ball videos for visual analysis
-python frames_to_video.py --input_dir intermediate/ball_frames/naive --output_dir intermediate/ball_videos/naive --fps 6
-# Compose HDR image
-python exposure2hdr.py --input_dir intermediate/ball_frames/naive/envmap --output_dir intermediate/ball_frames/naive/hdr
+python inpaint.py --dataset input/example --output_dir intermediate/ball_frames --video
+python ball2envmap.py --ball_dir intermediate/ball_frames/square --envmap_dir intermediate/ball_frames/envmap
+python exposure2hdr.py --input_dir intermediate/ball_frames/envmap --output_dir intermediate/ball_frames/hdr
+```
+and optionally if you want to view the video output:
+```shell
+python frames_to_video.py --input_dir intermediate/ball_frames --output_dir intermediate/ball_videos --fps 6
+```
+you can also try using the `smooth_frames` or `one_seed` flag on `inpaint.py` for the smoothing methods.
+
+Alternatively, do all at once by running:
+```shell
+python run_diffusionlight.py --input input/example --ball_style naive
+```
+but you will not get proper logging updates.
+
+## Step 2 - depth estimation
+
+Either use DepthAnything or VGGT:
+```shell
+conda run -n depthanything python scripts_depth/run_depth_anything.py --frames input/example --out_folder intermediate/depth
+```
+or
+```shell
+conda run -n vggt python scripts_depth/run_vggt.py --frames input/example --out_folder intermediate/depth
 ```
 
-## Video methods
-
-Make sure the video has no border or padding
-
+## Step 3 - run LEDiff
 ```shell
-python video_to_frames.py --video_file input/example.mov --output_dir input --framerate_reduction_factor 5
-```
-Naive:
-```shell
-python inpaint.py --dataset input/example --output_dir intermediate/ball_frames/naive --video
-python ball2envmap.py --ball_dir intermediate/ball_frames/naive/square --envmap_dir intermediate/ball_frames/naive/envmap
-python frames_to_video.py --input_dir intermediate/ball_frames/naive --output_dir intermediate/ball_videos/naive --fps 6
-```
-One seed:
-```shell
-python inpaint.py --dataset input/example --output_dir intermediate/ball_frames/one-seed --video --one_seed
-python ball2envmap.py --ball_dir intermediate/ball_frames/one-seed/square --envmap_dir intermediate/ball_frames/one-seed/envmap
-python frames_to_video.py --input_dir intermediate/ball_frames/one-seed --output_dir intermediate/ball_videos/one-seed --fps 6
-```
-One seed with custom seeds:
-```shell
-python inpaint.py --dataset input/example --output_dir intermediate/ball_frames/one-seed --video --one_seed --seed "0,37,71"
-python ball2envmap.py --ball_dir intermediate/ball_frames/one-seed/square --envmap_dir intermediate/ball_frames/one-seed/envmap
-python frames_to_video.py --input_dir intermediate/ball_frames/one-seed --output_dir intermediate/ball_videos/one-seed --fps 6 --seed "0,37,71"
-```
-Smooth:
-```shell
-python inpaint.py --dataset input/example --output_dir intermediate/ball_frames/smooth --video --smooth_frames
-python ball2envmap.py --ball_dir intermediate/ball_frames/smooth/square --envmap_dir intermediate/ball_frames/smooth/envmap
-python frames_to_video.py --input_dir intermediate/ball_frames/smooth --output_dir intermediate/ball_videos/smooth --fps 6
-```
-Smooth one seed:
-```shell
-python inpaint.py --dataset input/example --output_dir intermediate/ball_frames/smooth_one_seed --video --one_seed --smooth_frames
-python ball2envmap.py --ball_dir intermediate/ball_frames/smooth_one_seed/square --envmap_dir intermediate/ball_frames/smooth_one_seed/envmap
-python frames_to_video.py --input_dir intermediate/ball_frames/smooth_one_seed --output_dir intermediate/ball_videos/smooth_one_seed --fps 6
-```
-Smooth one seed with custom seeds:
-```shell
-python inpaint.py --dataset input/example --output_dir intermediate/ball_frames/smooth_one_seed --video --one_seed --smooth_frames --seed "0,37,71"
-python ball2envmap.py --ball_dir intermediate/ball_frames/smooth_one_seed/square --envmap_dir intermediate/ball_frames/smooth_one_seed/envmap
-python frames_to_video.py --input_dir intermediate/ball_frames/smooth_one_seed --output_dir intermediate/ball_videos/smooth_one_seed --fps 6 --seed "0,37,71"
-```
-
-Convert to HDR:
-```shell
-python exposure2hdr.py --input_dir <output_directory>/envmap --output_dir <output_directory>/hdr
-```
-
-### LEDiff
-```shell
-python LEDiff/examples/text_to_image/test_hdr_itm.py \
+conda run -n lediff python LEDiff/examples/text_to_image/test_hdr_itm.py \
   --model_path LEDiff/model_highlight/ \
   --image_folder input/example/ \
   --output_hdr_path intermediate/LEDiff/ \
   --keep_size
 ```
 
-### DepthAnything3
-Using the depthanything conda environment:
-
-Generate depth-maps for raw frames:
-Run `run_depth_anything.py` with `have_ball=False`
-
-Generate depth-maps for frames with chrome balls:
-Run `run_depth_anything.py` with `have_ball=True`, `ev=25`, `ball_type=naive` for example, or `one-seed`, `smooth`, etc.
-
-Smooth chrome ball depth-maps with geometry:
-Run `depth_anything_modifications.py` with `ev=25`
-
-### Video DepthAnything
-Generate depth-maps for raw frames:
+## Step 4 - process scene
+(still in diffusionlight-video env)
 ```shell
-cd Video-Depth-Anything
-conda activate videodepthanything
-python3 run.py --input_video ../input/example.mov --output_dir ../intermediate/depth_video/raw --encoder vitl --max_res=1024 --grayscale --save_npz
-cd ../
-conda activate diffusionlight-video
-python video_to_frames.py --video_file intermediate/depth_video/raw/example_vis.mp4 --output_dir intermediate/depth_video/raw --output_filename depth --framerate_reduction_factor 5
+python process_scene.py \
+  --ball_frames_folder intermediate/ball_frames \
+  --depth_folder intermediate/depth \
+  --lediff_folder intermediate/LEDiff \
+  --out_folder output \
+  --conf_quantile 0.1 \
+  --voxel_size 0.005
 ```
+Recommend voxel size of ~0.005 for VGGT or 0.05 for DepthAnything.
 
-### VGGT
-Generate depthmaps, pointcloud and lightcloud:
-Run `run_vggt.py`
-Run `vggt_to_pointcloud.py`
-
-### Generate output
-Run `diffusionLight_to_lightcloud.py` with `ball_type="naive"`, or `"smooth"`, `"one-seed"`
-Run `LEDiff_to_lightcloud.py`
-Run `scale_lightcloud.py` with `ball_type` again
-Run `make_final_envmap.py` with `ball_type` again, and set `relative_envmap_positions` for where in the scene you want to calculate.
-
+## Step 5 - generate final environment maps at custom points
+(still in diffusionlight-video env)
+```shell
+python make_final_envmap.py \
+  --lightcloud output/lightcloud.npy
+  --envmap output/missing_envmap.npy
+  --lightcloud_downscale output/lightcloud_downscale.npz
+  --out_folder final
+  --voxel_size_file intermediate/depth/voxel_size.npy
+```
 
 # Attribution
 Example video from Vecteezy.com

@@ -4,7 +4,7 @@ import os, torch
 import argparse
 from tqdm import tqdm
 import cv2
-from utility_functions import *
+from scripts_depthlight.utility_functions import *
 
 # Requires diffusionlight-video environment
 

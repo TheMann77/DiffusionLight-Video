@@ -2,7 +2,7 @@ import numpy as np
 import glob, os
 from natsort import natsorted
 import argparse
-from utility_functions import *
+from scripts_depthlight.utility_functions import *
 
 # Requires diffusionlight-video environment
 

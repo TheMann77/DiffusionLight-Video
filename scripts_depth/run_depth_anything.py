@@ -229,6 +229,8 @@ def run_depth_anything(
 ):
     stride = batch_size // 2
 
+    print("Loading files")
+
     file_filter = "*.png"
     image_files = natsorted(glob.glob(os.path.join(frames_folder, file_filter)))
     images = unpad(image_files, image_files[0], False)
@@ -285,20 +287,20 @@ def run_depth_anything(
                 f"{output_folder}/frames/depth_{i}.png",
                 d_uint8
             )
-
+    print("Saving")
     np.savez_compressed(f"{output_folder}/data.npz", 
                         extrinsic=extrinsics,
-                        intrinsic=extrinsics,
+                        intrinsic=intrinsics,
                         depth=depth,
                         depth_conf=conf,
-                        imgs=images,
+                        images=images,
                         )
 
 def create_argparser():    
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--frames", type=str, default="input/example", help="folder of input .png frames")
-    parser.add_argument("--out_folder", type=str, default="final", help="The folder to place the generated depths in")
+    parser.add_argument("--out_folder", type=str, default="intermediate/depth", help="The folder to place the generated depths in")
     parser.add_argument("--batch_size", type=int, default=32, help="number of frames per batch, reduce if memory runs out")
     parser.add_argument("--save_pngs", dest="save_pngs", action='store_true', help="save the per-frame depth pngs")
     parser.set_defaults(save_pngs=False)

@@ -1,7 +1,7 @@
 import numpy as np
 import ezexr
 import argparse
-from utility_functions import *
+from scripts_depthlight.utility_functions import *
 
 # Requires diffusionlight-video environment
 
@@ -82,7 +82,7 @@ def create_argparser():
     parser.add_argument("--out_folder", type=str, default="final", help="The folder to place the generated environment maps in")
     parser.add_argument("--out_filestem", type=str, default="envmap", help="save the output enviornment maps as out_filestem[i].exr")
     
-    parser.add_argument("--voxel_size_file", type=str, default="intermediate/depth_vggt/voxel_size.npy", help=".npy file containing the voxel size, or use --voxel_size")
+    parser.add_argument("--voxel_size_file", type=str, default="intermediate/depth/voxel_size.npy", help=".npy file containing the voxel size, or use --voxel_size")
     parser.add_argument("--voxel_size", type=float, default=None, help="voxel size, or use --voxel_size_file")
 
     parser.add_argument("--downscale_type", type=str, default="overall", help="Downscale type: overall uses total averages, uniform and channel match corresponding directions either linearly or channel-wise")

@@ -56,7 +56,7 @@ def run_vggt(
         # Move to CPU + numpy
         extrinsic_np = extrinsic.squeeze(0).detach().cpu().numpy()        # (88, 3, 4)
         intrinsic_np = intrinsic.squeeze(0).detach().cpu().numpy()        # (88, 3, 3)
-        depth_np = depth_map.squeeze(0).detach().cpu().numpy()            # (88, H, W, 1)
+        depth_np = depth_map.squeeze(0).detach().cpu().numpy().squeeze(-1)          # (88, H, W, 1)
         depth_conf_np = depth_conf.squeeze(0).detach().cpu().numpy()      # (88, H, W)
 
         imgs = images.squeeze(0).detach().cpu()        # (88, 3, H, W)
@@ -66,6 +66,10 @@ def run_vggt(
 
         os.makedirs(out_folder, exist_ok=True)
         # Save
+        print(depth_np.shape)
+        print(depth_conf_np.shape)
+        print(intrinsic_np.shape)
+        print(extrinsic_np.shape)
         np.savez_compressed(
             f"{out_folder}/data.npz",
             extrinsic=extrinsic_np,
@@ -80,7 +84,7 @@ def create_argparser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--frames", type=str, default="input/example", help="folder of input .png frames")
-    parser.add_argument("--out_folder", type=str, default="final", help="The folder to place the generated depths in")
+    parser.add_argument("--out_folder", type=str, default="intermediate/depth", help="The folder to place the generated depths in")
 
     return parser
 
@@ -88,5 +92,5 @@ if __name__ == "__main__":
     args = create_argparser().parse_args()
     run_vggt(
         frames_folder=args.frames,
-        output_folder=args.out_folder,
+        out_folder=args.out_folder,
     )

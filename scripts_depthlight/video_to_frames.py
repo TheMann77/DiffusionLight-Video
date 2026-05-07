@@ -18,8 +18,6 @@ def generate_frames_from_video(video_path, output_dir, output_filename, framerat
     output_path = output_dir + "/" + output_filename
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(output_path, exist_ok=True)
-    print(output_dir)
-    print(output_path)
     video_capture = cv2.VideoCapture(video_path)
     total_frames = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
     if max_frames == -1:
