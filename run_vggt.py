@@ -27,25 +27,26 @@ def run_vggt(
 
     # Initialize the model and load the pretrained weights.
     # This will automatically download the model weights the first time it's run, which may take a while.
-    model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
+    model = VGGT.from_pretrained("facebook/VGGT-1B").to(device=device, dtype=dtype)
+    model.eval()
 
     file_filter = "*.png"
     image_names = natsorted(glob.glob(os.path.join(frames_folder, file_filter)))
     # Load and preprocess example images
     images = load_and_preprocess_images(image_names).to(device)
-
-    with torch.no_grad():
+    print(images.shape)
+    with torch.inference_mode():
         with amp_ctx:
             images = images[None]  # add batch dimension
             aggregated_tokens_list, ps_idx = model.aggregator(images)
                     
-        # Predict Cameras
-        pose_enc = model.camera_head(aggregated_tokens_list)[-1]
-        # Extrinsic and intrinsic matrices, following OpenCV convention (camera from world)
-        extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, images.shape[-2:])
+            # Predict Cameras
+            pose_enc = model.camera_head(aggregated_tokens_list)[-1]
+            # Extrinsic and intrinsic matrices, following OpenCV convention (camera from world)
+            extrinsic, intrinsic = pose_encoding_to_extri_intri(pose_enc, images.shape[-2:])
 
-        # Predict Depth Maps
-        depth_map, depth_conf = model.depth_head(aggregated_tokens_list, images, ps_idx)
+            # Predict Depth Maps
+            depth_map, depth_conf = model.depth_head(aggregated_tokens_list, images, ps_idx)
             
         # Construct 3D Points from Depth Maps and Cameras
         # which usually leads to more accurate 3D points than point map branch
@@ -66,10 +67,6 @@ def run_vggt(
 
         os.makedirs(out_folder, exist_ok=True)
         # Save
-        print(depth_np.shape)
-        print(depth_conf_np.shape)
-        print(intrinsic_np.shape)
-        print(extrinsic_np.shape)
         np.savez_compressed(
             f"{out_folder}/data.npz",
             extrinsic=extrinsic_np,

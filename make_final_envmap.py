@@ -1,5 +1,6 @@
 import numpy as np
 import ezexr
+import os
 import argparse
 from scripts_depthlight.utility_functions import *
 
@@ -20,7 +21,7 @@ def make_final_envmap(
 ):
     def log(txt):
         if logs:
-            log(txt)
+            print(txt)
 
     if downscale_type not in ["overall", "uniform", "channel"]:
         raise ValueError("colour_average_type must be median or mean")
@@ -70,6 +71,7 @@ def make_final_envmap(
     envmaps = np.where(mask, missing_envmap[None, ...], envmaps)
     envmaps = fill_missing_pixels(envmaps)
         
+    os.makedirs(output_folder, exist_ok=True)
     for i, envmap in enumerate(envmaps):
         ezexr.imwrite(f"{output_folder}/{output_filestem}{i}.exr", envmap.astype(np.float32))
 

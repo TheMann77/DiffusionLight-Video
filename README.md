@@ -70,11 +70,11 @@ but you will not get proper logging updates.
 
 Either use DepthAnything or VGGT:
 ```shell
-conda run -n depthanything python scripts_depth/run_depth_anything.py --frames input/example --out_folder intermediate/depth
+conda run -n depthanything python run_depth_anything.py --frames input/example --out_folder intermediate/depth --batch_size 32
 ```
 or
 ```shell
-conda run -n vggt python scripts_depth/run_vggt.py --frames input/example --out_folder intermediate/depth
+conda run -n vggt python run_vggt.py --frames input/example --out_folder intermediate/depth
 ```
 
 ## Step 3 - run LEDiff
@@ -97,16 +97,21 @@ python process_scene.py \
   --conf_quantile 0.1 \
   --voxel_size 0.005
 ```
-Recommend voxel size of ~0.005 for VGGT or 0.05 for DepthAnything.
+Recommend voxel size of ~0.005 for VGGT or ~0.05 for DepthAnything.
+Or run individual files in `scripts_depthlight` for more control:
+- `depth_to_pointcloud.py`
+- `make_lightcloud.npy`
+- `make_backup_envmap.npy`
+- `scale_lightcloud.npy`
 
 ## Step 5 - generate final environment maps at custom points
 (still in diffusionlight-video env)
 ```shell
 python make_final_envmap.py \
-  --lightcloud output/lightcloud.npy
-  --envmap output/missing_envmap.npy
-  --lightcloud_downscale output/lightcloud_downscale.npz
-  --out_folder final
+  --lightcloud output/lightcloud.npy \
+  --envmap output/missing_envmap.exr \
+  --lightcloud_downscale output/lightcloud_downscale.npz \
+  --out_folder final \
   --voxel_size_file intermediate/depth/voxel_size.npy
 ```
 

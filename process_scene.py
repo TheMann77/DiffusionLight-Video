@@ -40,7 +40,7 @@ def main():
     make_backup_envmap(
         pointcloud_file=f"{args.depth_folder}/pointcloud.ply",
         ball_frames_folder=args.ball_frames_folder,
-        depth_data_folder=args.depth_data_folder,
+        depth_data_folder=args.depth_folder,
         output_folder=args.out_folder,
     )
     print("Scaling lightcloud:")

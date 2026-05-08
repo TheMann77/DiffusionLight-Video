@@ -4,7 +4,7 @@ import os, torch
 import argparse
 from tqdm import tqdm
 import cv2
-from scripts_depthlight.utility_functions import *
+from utility_functions import *
 
 # Requires diffusionlight-video environment
 
@@ -40,9 +40,6 @@ def make_lightcloud(
     extrinsics = data["extrinsic"] # (F, 3, 4), world-to-camera
     intrinsics = data["intrinsic"] # (F, 3, 3)
     depths = data["depth"] # (F, H, W, 1)
-    depth_confs = data["depth_conf"] # (F, H, W)
-    all_points = data["points_unproj"] # (F, H, W, 3)
-    images = data["images"] # (F, H, W, 3)
     R = extrinsics[:, :, :3] # (F, 3, 3), world-to-camera
     t = extrinsics[:, :, 3] # (F, 3)
 
@@ -53,7 +50,7 @@ def make_lightcloud(
 
     p, _ = pointcloud.shape
     f, h, w, _ = hdrs_bgr.shape
-    F, H, W, _ = depths.shape
+    F, H, W = depths.shape
     assert f == F, "Number of frames inputted to LEDiff and VGGT must be equal"
     # Resize HDRs and convert from BGR to RGB
     hdrs = np.stack([
@@ -210,6 +207,10 @@ def make_lightcloud(
         avg_rgb = median_rgb
     else:
         avg_rgb = mean_rgb
+    
+    col_min = avg_rgb.min()
+    if col_min < 0:
+        avg_rgb -= col_min
     # Can use mean or median here:
     lightcloud = np.concatenate(
         [pointcloud, avg_rgb],
@@ -224,16 +225,13 @@ def make_lightcloud(
 
     points = lightcloud[:, :3]   # (p, 3)
     rgb_hdr = lightcloud[:, 3:]  # (p, 3)
-    rgb_ldr = (exposure * rgb_hdr) / (1.0 + exposure * rgb_hdr)
-    rgb_ldr = np.clip(rgb_ldr, 0, 1) ** (1.0 / gamma)
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    pcd.colors = o3d.utility.Vector3dVector(rgb_ldr)
 
-    log("Total points:", p)
+    log("Total points:" + str(p))
     mask = np.any(lightcloud[:, 3:] != 0, axis=1)
     coloured_lightcloud = lightcloud[mask]
-    log("Coloured points:", coloured_lightcloud.shape[0])
+    log("Coloured points:" + str(coloured_lightcloud.shape[0]))
+
+    log("Smoothing pointcloud colours:")
 
     rgb_new, rgb_ldr = smooth_pointcloud_colors(
         points=points,
@@ -245,6 +243,7 @@ def make_lightcloud(
         output_path=f"{output_folder}/{lightcloud_name}.ply",
     )
 
+    log("Saving lightcloud:")
     lightcloud[:, 3:] = rgb_new
     np.save(f"{output_folder}/{lightcloud_name}.npy", lightcloud)
 
@@ -262,9 +261,9 @@ def make_lightcloud(
 def create_argparser():    
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--pointcloud", type=str, default="intermediate/depth_vggt/pointcloud.ply", help="pointcloud file to read (.ply)")
+    parser.add_argument("--pointcloud", type=str, default="intermediate/depth/pointcloud.ply", help="pointcloud file to read (.ply)")
     parser.add_argument("--hdr_frames", type=str, default="intermediate/LEDiff/hdr_bgr.npy", help=".npy file containing the LEDiff output")
-    parser.add_argument("--depth_data", type=str, default="intermediate/depth_vggt", help="the folder containing the output of VGGT/DepthAnything")
+    parser.add_argument("--depth_data", type=str, default="intermediate/depth", help="the folder containing the output of VGGT/DepthAnything")
     parser.add_argument("--out_folder", type=str, default="output", help="The folder to place the lightcloud and backup environment map in")
     
     parser.add_argument("--lightcloud_name", type=str, default="lightcloud", help="the name of the output lightcloud .ply file")

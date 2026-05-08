@@ -6,7 +6,7 @@ import glob, os, torch
 import ezexr
 from tqdm import tqdm
 import open3d as o3d
-from scripts_depthlight.utility_functions import *
+from utility_functions import *
 
 # Requires diffusionlight-video environment
 
@@ -48,15 +48,11 @@ def make_backup_envmap(
     ball_centres = balls["centres"] # (F, 3)
     ball_radii = balls["radii"] # (F,)
     extrinsics = data["extrinsic"] # (F, 3, 4), world-to-camera
-    intrinsics = data["intrinsic"] # (F, 3, 3)
     depths = data["depth"] # (F, H, W, 1)
-    depth_confs = data["depth_conf"] # (F, H, W)
-    all_points = data["points_unproj"] # (F, H, W, 3)
-    images = data["images"] # (F, H, W, 3)
 
     p, _ = pointcloud.shape
     f, h, w, _ = envmaps.shape
-    F, H, W, _ = depths.shape
+    F, H, W = depths.shape
     assert f == F, "Number of frames inputted to DiffusionLight and depth predictor must be equal"
 
     log("Setting up voxel grid")
