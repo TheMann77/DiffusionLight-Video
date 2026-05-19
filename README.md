@@ -2,14 +2,7 @@
 
 ## Installation
 
-To setup Conda on ssh, run the following commmands in the terminal:
-```shell
-ssh panther
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
-bash miniconda.sh
-```
-
-To set up the Python environments you need to run the following commands (only need one of VGGT or DepthAnything unless you want to try both models):
+To set up the Python environments you need to first set up Conda, then run the following commands (only need one of VGGT or DepthAnything unless you want to try both models):
 ```shell
 conda env create -f environments/diffusionlight.yml
 conda activate diffusionlight-video
