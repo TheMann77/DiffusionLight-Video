@@ -4,7 +4,10 @@ import os, torch
 import argparse
 from tqdm import tqdm
 import cv2
-from utility_functions import *
+try:
+    from .utility_functions import *
+except ImportError:
+    from utility_functions import *
 
 # Requires diffusionlight-video environment
 
@@ -16,7 +19,7 @@ def make_lightcloud(
         lightcloud_name="lightcloud",
         only_hitpoints_name=None, # If included, saves a pointcloud of only the points which were hit directly
         no_torch=False,
-        weight_distance=True,
+        weight_distance=False,
         colour_average_type="median", # median or mean
         logs=True,
 ):
@@ -28,8 +31,9 @@ def make_lightcloud(
         raise ValueError("colour_average_type must be median or mean")
     
     # w, h = width/height of HDR images, from LEDiff output
-    # F = number of input frames into LEDiff and VGGT
-    hdrs_bgr = np.load(hdr_frames_file) # (F, h, w, 3)
+    # f = number of input frames into LEDiff
+    # F = number of input frames into DepthAnything/VGGT
+    hdrs_bgr = np.load(hdr_frames_file) # (f, h, w, 3)
     pcd = o3d.io.read_point_cloud(pointcloud_file)
     data = np.load(f"{depth_data_folder}/data.npz")
     voxel_size = np.load(f"{depth_data_folder}/voxel_size.npy").item()
@@ -51,7 +55,11 @@ def make_lightcloud(
     p, _ = pointcloud.shape
     f, h, w, _ = hdrs_bgr.shape
     F, H, W = depths.shape
-    assert f == F, "Number of frames inputted to LEDiff and VGGT must be equal"
+    assert f >= F, "Number of frames inputted to LEDiff must be at least the number of frames inputted to DepthAnything/VGGT"
+    if f > F:
+        log("More LEDiff frames than depth frames, sampling")
+        indices = np.linspace(0, f-1, F, dtype=int)
+        hdrs_bgr = np.stack([hdrs_bgr[i] for i in indices]) # (F, h, w, 3)
     # Resize HDRs and convert from BGR to RGB
     hdrs = np.stack([
         cv2.resize(hdr[..., ::-1], (W, H), interpolation=cv2.INTER_CUBIC)
@@ -208,9 +216,6 @@ def make_lightcloud(
     else:
         avg_rgb = mean_rgb
     
-    col_min = avg_rgb.min()
-    if col_min < 0:
-        avg_rgb -= col_min
     # Can use mean or median here:
     lightcloud = np.concatenate(
         [pointcloud, avg_rgb],
@@ -238,7 +243,7 @@ def make_lightcloud(
         rgb_hdr=rgb_hdr,
         k=10,
         alpha=0.5,
-        exposure=exposure,
+        exposure=exposure / depths.mean(),
         gamma=gamma,
         output_path=f"{output_folder}/{lightcloud_name}.ply",
     )
@@ -271,8 +276,8 @@ def create_argparser():
     
     parser.add_argument('--no_torch', dest='no_torch', action='store_true', help="use numpy rather than pytorch (slower)")
     parser.set_defaults(no_torch=False)
-    parser.add_argument('--no_weighted_distance', dest='weight_distance', action='store_false', help="don't weight lighting by distance away from ball")
-    parser.set_defaults(weight_distance=True)
+    parser.add_argument('--weight_distance', dest='weight_distance', action='store_true', help="weight lighting by distance away from ball")
+    parser.set_defaults(weight_distance=False)
     parser.add_argument("--colour_average_type", type=str, default="median", help="where multiple rays hit a point, average by 'median' (default) or 'mean'")
     parser.add_argument('--hide-logs', dest='logs', action='store_false', help="hide logs")
     parser.set_defaults(logs=True)

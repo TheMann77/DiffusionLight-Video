@@ -80,7 +80,7 @@ def process_image(args, info):
         out_luminace = luminances[i-1] * (1-mask) + out_luminace * mask
         
     hdr_rgb = image0_linear * (out_luminace / (luminances[0] + 1e-10))[:, :, np.newaxis]
-    
+    hdr_rgb = np.clip(hdr_rgb, 0, 1)
     # tone map for visualization    
     hdr2ldr = TonemapHDR(gamma=args.gamma, percentile=99, max_mapping=0.9)
     

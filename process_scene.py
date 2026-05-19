@@ -14,7 +14,9 @@ def create_argparser():
     
     parser.add_argument("--conf_quantile", type=float, default=.1, help='the proportion of points to exclude based on confidence (.1 = exclude 10%)')
     parser.add_argument("--voxel_size", type=float, default=0.005, help="downsizing voxel size of pointcloud. Recommend ~0.05 for DepthAnything, ~0.005 for VGGT")
-    
+    parser.add_argument('--weight_distance', dest='weight_distance', action='store_true', help="weight lighting by distance away from ball")
+    parser.set_defaults(weight_distance=False)
+
     parser.add_argument('--video', dest='is_video', action='store_true', help="are the input images the frames of a video?")
     parser.set_defaults(is_video=False)
 
@@ -35,6 +37,7 @@ def main():
         hdr_frames_file=f"{args.lediff_folder}/hdr_bgr.npy",
         depth_data_folder=args.depth_folder,
         output_folder=args.out_folder,
+        weight_distance=args.weight_distance,
     )
     print("Making backup envmap:")
     make_backup_envmap(
@@ -46,9 +49,11 @@ def main():
     print("Scaling lightcloud:")
     scale_lightcloud(
         lightcloud_npy=f"{args.out_folder}/lightcloud.npy",
+        backup_envmap=f"{args.out_folder}/missing_envmap.exr",
         depth_data_folder=args.depth_folder,
         ball_frames_folder=args.ball_frames_folder,
         output_folder=args.out_folder,
+        weight_distance=args.weight_distance,
     )
     print("Done")
 

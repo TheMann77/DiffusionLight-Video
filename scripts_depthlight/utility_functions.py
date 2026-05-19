@@ -719,6 +719,7 @@ def build_envmaps_from_lightcloud(
         voxel_size, # float
         envmap_shape, # (h, w)
         alg_type="torch", # numpy or torch
+        weight_distance=False,
 ):
     pointcloud = lightcloud[:, :3]
     point_colors = lightcloud[:, 3:]
@@ -790,7 +791,11 @@ def build_envmaps_from_lightcloud(
 
         idx = hit_point_indices.reshape(h, w)
         valid = idx >= 0
-        envmaps[i][valid] = point_colors[idx[valid]] / dist2[:, None]
+        if weight_distance:
+            weighted_colours = point_colors[idx[valid]] / dist2[:, None]
+        else:
+            weighted_colours = point_colors[idx[valid]]
+        envmaps[i][valid] = weighted_colours
     return envmaps
 
 def rotate_envmap_camera_to_world(env_cam, R_wc):

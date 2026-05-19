@@ -6,7 +6,10 @@ import glob, os, torch
 import ezexr
 from tqdm import tqdm
 import open3d as o3d
-from utility_functions import *
+try:
+    from .utility_functions import *
+except ImportError:
+    from utility_functions import *
 
 # Requires diffusionlight-video environment
 
@@ -21,7 +24,7 @@ def make_backup_envmap(
         only_hitpoints_name=None, # If included, saves a pointcloud of only the points which were hit directly
         no_torch=False,
         assume_envmap_reflects=False, # If true, we assume the envmap is the reflection as visible from the camera rather than the true envmap (false assumption)
-        weight_distance=True,
+        weight_distance=False,
         colour_average_type="median", # median or mean
         logs=True,
 ):
@@ -40,11 +43,12 @@ def make_backup_envmap(
     voxel_size = np.load(f"{depth_data_folder}/voxel_size.npy").item()
 
     # p = number of points in pointcloud
-    # F = number of input frames into DiffusionLight and VGGT
+    # f = number of input frames into DiffusionLight
+    # F = number of input frames into DepthAnything/VGGT
     # w, h = width/height of HDR envmaps, from DiffusionLight output
     # W, H = width/height of frames in pixels, from VGGT output (not original)
     pointcloud = np.asarray(pcd.points) # (p, 3)
-    envmaps = np.stack([load_exr(f) for f in envmap_files], axis=0) # (F, h, w, 3)
+    envmaps = np.stack([load_exr(f) for f in envmap_files], axis=0) # (f, h, w, 3)
     ball_centres = balls["centres"] # (F, 3)
     ball_radii = balls["radii"] # (F,)
     extrinsics = data["extrinsic"] # (F, 3, 4), world-to-camera
@@ -53,7 +57,11 @@ def make_backup_envmap(
     p, _ = pointcloud.shape
     f, h, w, _ = envmaps.shape
     F, H, W = depths.shape
-    assert f == F, "Number of frames inputted to DiffusionLight and depth predictor must be equal"
+    assert f >= F, "Number of frames inputted to DiffusionLight must be at least the number of frames inputted to DepthAnything/VGGT"
+    if f > F:
+        log("More DiffusionLight frames than depth frames, sampling")
+        indices = np.linspace(0, f-1, F, dtype=int)
+        envmaps = np.stack([envmaps[i] for i in indices]) # (F, h, w, 3)
 
     log("Setting up voxel grid")
     # Build a voxel grid around pointcloud, assuming each point is centre of a voxel
@@ -268,10 +276,10 @@ def make_backup_envmap(
         pcd.points = o3d.utility.Vector3dVector(points)
         pcd.colors = o3d.utility.Vector3dVector(rgb_ldr)
 
-        log("Total points:", p)
+        log("Total points:" + str(p))
         mask = np.any(lightcloud[:, 3:] != 0, axis=1)
         coloured_lightcloud = lightcloud[mask]
-        log("Coloured points:", coloured_lightcloud.shape[0])
+        log("Coloured points:" + str(coloured_lightcloud.shape[0]))
 
         rgb_new, rgb_ldr = smooth_pointcloud_colors(
             points=points,
@@ -298,25 +306,26 @@ def make_backup_envmap(
             o3d.io.write_point_cloud(f"{output_folder}/{only_hitpoints_name}.ply", pcd)
 
     ezexr.imwrite(f"{output_folder}/{backup_envmap_name}.exr", envmap_missing_avg)
+    save_hdr_as_ldr(envmap_missing_avg, "missing_envmap.png")
 
 def create_argparser():    
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--pointcloud", type=str, default="intermediate/depth_vggt/pointcloud.ply", help="pointcloud file to read (.ply)")
+    parser.add_argument("--pointcloud", type=str, default="intermediate/depth/pointcloud.ply", help="pointcloud file to read (.ply)")
     parser.add_argument("--ball_frames_folder", type=str, default="intermediate/ball_frames", help="folder containing the DiffusionLight ball frames, including envmap, hdr, raw and square folders")
-    parser.add_argument("--depth_data", type=str, default="intermediate/depth_vggt", help="the folder containing the output of VGGT/DepthAnything")
+    parser.add_argument("--depth_data", type=str, default="intermediate/depth", help="the folder containing the output of VGGT/DepthAnything")
     parser.add_argument("--out_folder", type=str, default="output", help="The folder to place the lightcloud and backup environment map in")
     
-    parser.add_argument("--lightcloud_name", type=str, default="lightcloud", help="the name of the output lightcloud .ply file")
     parser.add_argument("--backup_envmap_name", type=str, default="missing_envmap", help="the name of the output backup envmap .exr file")
     parser.add_argument("--only_hitpoints_name", type=str, help="if provided, saves a pointcloud with only the points which were hit directly")
     
     parser.add_argument('--save_lightcloud', dest='save_lightcloud', action='store_true', help="save the generated lightcloud (usually we only use the backup envmap)")
     parser.set_defaults(save_lightcloud=False)
+    parser.add_argument("--lightcloud_name", type=str, default="lightcloud", help="the name of the output lightcloud .ply file")
     parser.add_argument('--no_torch', dest='no_torch', action='store_true', help="use numpy rather than pytorch (slower)")
     parser.set_defaults(no_torch=False)
-    parser.add_argument('--no_weighted_distance', dest='weight_distance', action='store_false', help="don't weight lighting by distance away from ball")
-    parser.set_defaults(weight_distance=True)
+    parser.add_argument('--weighted_distance', dest='weight_distance', action='store_true', help="weight lighting by distance away from ball")
+    parser.set_defaults(weight_distance=False)
     parser.add_argument("--colour_average_type", type=str, default="median", help="where multiple rays hit a point, average by 'median' (default) or 'mean'")
     parser.add_argument('--hide-logs', dest='logs', action='store_false', help="hide logs")
     parser.set_defaults(logs=True)

@@ -14,7 +14,11 @@ from tqdm import tqdm
 def unpad(img_files, original_frame, padded=True):
     #If padded is true, assumes file is 1024x1024
     #Otherwise resizes them
-    imgs = [cv2.imread(img_file) for img_file in img_files]
+    imgs = []
+    for img_file in img_files:
+        img = cv2.imread(img_file, cv2.IMREAD_COLOR)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        imgs.append(img)
     original = cv2.imread(original_frame)
 
     goal_height, goal_width = 1024, 1024
@@ -225,6 +229,7 @@ def run_depth_anything(
         frames_folder,
         output_folder,
         batch_size=32,
+        res=1024,
         save_pngs=False,
 ):
     stride = batch_size // 2
@@ -250,7 +255,7 @@ def run_depth_anything(
         batch = images[start:end]
 
         with torch.inference_mode():
-            pred = model.inference(batch, process_res=1024)
+            pred = model.inference(batch, process_res=res)
         
         depths = pred.depth.copy()
         confs = pred.conf.copy()
@@ -296,12 +301,13 @@ def run_depth_anything(
                         images=images,
                         )
 
-def create_argparser():    
+def create_argparser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--frames", type=str, default="input/example", help="folder of input .png frames")
     parser.add_argument("--out_folder", type=str, default="intermediate/depth", help="The folder to place the generated depths in")
     parser.add_argument("--batch_size", type=int, default=32, help="number of frames per batch, reduce if memory runs out")
+    parser.add_argument("--res", type=int, default=1024, help="process_resolution")
     parser.add_argument("--save_pngs", dest="save_pngs", action='store_true', help="save the per-frame depth pngs")
     parser.set_defaults(save_pngs=False)
 
@@ -313,5 +319,6 @@ if __name__ == "__main__":
         frames_folder=args.frames,
         output_folder=args.out_folder,
         batch_size=args.batch_size,
+        res=args.res,
         save_pngs=args.save_pngs,
     )

@@ -15,6 +15,7 @@ import numpy as np
 def run_vggt(
         frames_folder,
         out_folder,
+        max_frames=None,
 ):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -32,6 +33,9 @@ def run_vggt(
 
     file_filter = "*.png"
     image_names = natsorted(glob.glob(os.path.join(frames_folder, file_filter)))
+    if max_frames is not None and max_frames < len(image_names):
+        indices = np.linspace(0, len(image_names)-1, max_frames, dtype=int)
+        image_names = [image_names[i] for i in indices]
     # Load and preprocess example images
     images = load_and_preprocess_images(image_names).to(device)
     print(images.shape)
@@ -82,6 +86,7 @@ def create_argparser():
 
     parser.add_argument("--frames", type=str, default="input/example", help="folder of input .png frames")
     parser.add_argument("--out_folder", type=str, default="intermediate/depth", help="The folder to place the generated depths in")
+    parser.add_argument("--max_frames", type=int, default=-1, help="Maximum number of frames to input")
 
     return parser
 
@@ -90,4 +95,5 @@ if __name__ == "__main__":
     run_vggt(
         frames_folder=args.frames,
         out_folder=args.out_folder,
+        max_frames=None if args.max_frames < 0 else args.max_frames,
     )

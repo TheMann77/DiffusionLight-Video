@@ -2,7 +2,11 @@ import numpy as np
 import glob, os
 from natsort import natsorted
 import argparse
-from utility_functions import *
+try:
+    from .utility_functions import *
+except ImportError:
+    from utility_functions import *
+import matplotlib.pyplot as plt
 
 # Requires diffusionlight-video environment
 
@@ -20,6 +24,7 @@ def scale_lightcloud(
         depth_data_folder,
         ball_frames_folder,
         output_folder,
+        weight_distance=False,
         only_forward_facing=False,
         no_torch=False,
         logs=True,
@@ -38,6 +43,13 @@ def scale_lightcloud(
     backup_envmap = load_exr(backup_envmap)
     R = extrinsics[:, :, :3] # (F, 3, 3), world-to-camera
     envmap_files = natsorted(glob.glob(os.path.join(f"{ball_frames_folder}/hdr", "*.exr")))
+    f = len(envmap_files)
+    F, _ = ball_centres.shape
+    assert f >= F, "Number of frames inputted to DiffusionLight must be at least the number of frames inputted to DepthAnything/VGGT"
+    if f > F:
+        log("More DiffusionLight frames than depth frames, sampling")
+        indices = np.linspace(0, f-1, F, dtype=int)
+        envmap_files = [envmap_files[i] for i in indices]
 
     # Transform DiffusionLight envmaps to world-coordinates
     if only_forward_facing:
@@ -47,11 +59,9 @@ def scale_lightcloud(
         DL_envmaps = np.stack([rotate_envmap_camera_to_world(load_exr(f), R[i]) for i, f in enumerate(envmap_files)], axis=0) # (F, h, w, 3)
     
 
-    F, h, w, _ = DL_envmaps.shape
-    f, _ = ball_centres.shape
-    assert f == F, "Number of frames inputted to VGGT and DiffusionLight must be equal"
+    _, h, w, _ = DL_envmaps.shape
 
-    use_backup_envmap = False
+    use_backup_envmap = True
     if use_backup_envmap:
         DL_envmaps = np.broadcast_to(backup_envmap[None], (F, h, w, 3))
 
@@ -69,18 +79,30 @@ def scale_lightcloud(
         voxel_size=voxel_size,
         envmap_shape=(h, w),
         alg_type=alg_type,
+        weight_distance=weight_distance,
     ) # (F, h, w, 3)
+
+    save_hdr_as_ldr(LC_envmaps[0], "LEDiff.png")
+    save_hdr_as_ldr(DL_envmaps[0], "DiffusionLight.png")
 
     # Compare DiffusionLight envmaps with lightcloud, on pixels where the lightcloud hits
     eps = 1e-8
-    LC_empty_mask = np.all(LC_envmaps <= eps, axis=-1)   # (h, w)
-    DL_empty_mask = np.all(DL_envmaps <= eps, axis=-1)   # (h, w)
+    LC_empty_mask = np.all(LC_envmaps <= eps, axis=-1)   # (F, h, w)
+    DL_empty_mask = np.all(DL_envmaps <= eps, axis=-1)   # (F, h, w)
     mask = (
         (~LC_empty_mask) & (~DL_empty_mask)
     )
 
     DL_valid = DL_envmaps[mask]
     LC_valid = LC_envmaps[mask]
+
+    mean_std = np.array([LC_valid.mean(), DL_valid.mean(), LC_valid.std(), DL_valid.std()])
+    """plt.figure()
+    for i, c in enumerate(["red", "green", "blue"]):
+        plt.scatter(DL_valid[:, i], LC_valid[:, i], c=c, s=.01)
+        plt.xlabel("Backup environment map intensity")
+        plt.ylabel("Lightcloud environment map intensity")
+        plt.savefig(f"colmap.png")"""
 
     # Find scaling factor of HDRs
     DL_luminance = 0.2126 * DL_envmaps[..., 0] + 0.7152 * DL_envmaps[..., 1] + 0.0722 * DL_envmaps[..., 2]
@@ -97,11 +119,13 @@ def scale_lightcloud(
         uniform=np.array(scale),
         channel=channel_scale,
         overall=np.array(overall_scale),
+        scale_shift=mean_std,
     )
 
-    log("Per-channel median scaling:" + str(channel_scale))
-    log("Log-space luminance scale:" + str(scale))
-    log("Overall mean scale:" + str(overall_scale))
+    log("Per-channel median scaling: " + str(channel_scale))
+    log("Log-space luminance scale: " + str(scale))
+    log("Overall mean scale: " + str(overall_scale))
+    log("Scale and shift: " + str(mean_std))
 
 def create_argparser():    
     parser = argparse.ArgumentParser()
