@@ -112,7 +112,7 @@ def make_final_envmap(
     os.makedirs(output_folder, exist_ok=True)
     for i, envmap in enumerate(envmaps):
         ezexr.imwrite(f"{output_folder}/{output_filestem}{i}.exr", envmap.astype(np.float32))
-        save_hdr_as_ldr(envmap, f"envmap_{i}.png")
+        #save_hdr_as_ldr(envmap, f"envmap_{i}.png")
 
 def create_argparser():    
     parser = argparse.ArgumentParser()
@@ -129,7 +129,7 @@ def create_argparser():
     parser.add_argument("--voxel_size_file", type=str, default="intermediate/depth/voxel_size.npy", help=".npy file containing the voxel size, or use --voxel_size")
     parser.add_argument("--voxel_size", type=float, default=None, help="voxel size, or use --voxel_size_file")
 
-    parser.add_argument("--downscale_type", type=str, default="overall", help="Downscale type: overall uses total averages, uniform and channel match corresponding directions either linearly or channel-wise")
+    parser.add_argument("--downscale_type", type=str, default="map", help="Downscale type: overall uses total averages, uniform and channel match corresponding directions either linearly or channel-wise")
 
     parser.add_argument('--weight_distance', dest='weight_distance', action='store_true', help="weight lighting by distance away from ball")
     parser.set_defaults(weight_distance=False)

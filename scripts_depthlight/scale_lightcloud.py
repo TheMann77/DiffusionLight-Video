@@ -82,8 +82,8 @@ def scale_lightcloud(
         weight_distance=weight_distance,
     ) # (F, h, w, 3)
 
-    save_hdr_as_ldr(LC_envmaps[0], "LEDiff.png")
-    save_hdr_as_ldr(DL_envmaps[0], "DiffusionLight.png")
+    #save_hdr_as_ldr(LC_envmaps[0], "LEDiff.png")
+    #save_hdr_as_ldr(DL_envmaps[0], "DiffusionLight.png")
 
     # Compare DiffusionLight envmaps with lightcloud, on pixels where the lightcloud hits
     eps = 1e-8

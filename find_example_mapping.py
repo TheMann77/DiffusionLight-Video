@@ -5,14 +5,21 @@ from scripts_depthlight.utility_functions import load_exr, save_hdr_as_ldr
 import numpy as np
 from scipy.optimize import curve_fit
 
+### Code to calculate a mapping between LEDiff and DiffusionLight
+### First run LEDiff on a DiffusionLight LDR environment map
+### Then set the DiffusionLight HDR envmap as DL_file and the LEDiff output as LEDiff_file 
+
 def model(x, a, b, c, d):
     return np.tan((np.pi / c) * (x + d)) * a + b
 
 """def model(x, a, b):
     return a * x + b"""
 
-DiffusionLight = load_exr("intermediate/ball_frames/naive/hdr/example0.exr")
-LEDiff = cv2.imread("test/frames/hdr_0.hdr", cv2.IMREAD_ANYDEPTH | cv2.IMREAD_COLOR)
+DL_file = "intermediate/ball_frames/naive/hdr/example0.exr"
+LEDiff_file = "test/frames/hdr_0.hdr"
+
+DiffusionLight = load_exr(DL_file)
+LEDiff = cv2.imread(LEDiff_file, cv2.IMREAD_ANYDEPTH | cv2.IMREAD_COLOR)
 
 all_params = []
 yms = []
