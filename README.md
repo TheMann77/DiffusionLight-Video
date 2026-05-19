@@ -39,7 +39,7 @@ Note that there are four different Conda envrironments, one for each part of the
 
 Make sure the input video has no border or padding
 
-Either run the following commands:
+Run the following commands:
 ```shell
 conda activate diffusionlight-video
 python scripts_depthlight/video_to_frames.py --video_file input/example.mov --output_dir input --framerate_reduction_factor 5
