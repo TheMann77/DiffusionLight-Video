@@ -43,7 +43,7 @@ Run the following commands:
 ```shell
 conda activate diffusionlight-video
 python scripts_depthlight/video_to_frames.py --video_file input/example.mov --output_dir input --framerate_reduction_factor 5
-python inpaint.py --dataset input/example --output_dir intermediate/ball_frames --video
+python inpaint.py --dataset input/example --output_dir intermediate/ball_frames --video --smooth_frames
 python ball2envmap.py --ball_dir intermediate/ball_frames/square --envmap_dir intermediate/ball_frames/envmap
 python exposure2hdr.py --input_dir intermediate/ball_frames/envmap --output_dir intermediate/ball_frames/hdr
 ```
@@ -51,11 +51,11 @@ and optionally if you want to view the video output:
 ```shell
 python scripts_depthlight/frames_to_video.py --input_dir intermediate/ball_frames --output_dir intermediate/ball_videos --fps 6
 ```
-you can also try using the `smooth_frames` or `one_seed` flag on `inpaint.py` for the smoothing methods.
+you can also try removing the `smooth_frames` flag or using the `one_seed` flag on `inpaint.py` to change the smoothing method.
 
 Alternatively, do all at once by running:
 ```shell
-python run_diffusionlight.py --input input/example --ball_style naive
+python run_diffusionlight.py --input input/example --ball_style smooth
 ```
 but you will not get proper logging updates.
 
@@ -84,7 +84,7 @@ python LEDiff/examples/text_to_image/test_hdr_itm.py \
   --output_hdr_path intermediate/LEDiff/ \
   --keep_size
 ```
-you can also try using ``--model_path LEDiff/model_shadow/` for underexposed scenes
+you can also try using ``--model_path LEDiff/model_shadow/` for underexposed scenes, if you download the model first.
 
 ## Step 4 - process scene
 ```shell
@@ -100,9 +100,10 @@ python process_scene.py \
 Recommend voxel size of ~0.005 for VGGT or ~0.05 for DepthAnything.
 Or run individual files in `scripts_depthlight` for more control:
 - `depth_to_pointcloud.py`
-- `make_lightcloud.npy`
-- `make_backup_envmap.npy`
-- `scale_lightcloud.npy`
+- `make_lightcloud.py`
+- `make_backup_envmap.py`
+- `scale_lightcloud.py`
+Note: `scale_lightcloud` isn't needed if only using `map` downscaling.
 
 ## Step 5 - generate final environment maps at custom points
 (still in diffusionlight-video env)
